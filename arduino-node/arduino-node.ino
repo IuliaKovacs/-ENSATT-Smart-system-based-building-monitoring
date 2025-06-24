@@ -65,6 +65,8 @@ typedef struct {
 } DataEntry;
 
 DataEntry mesh_node_data_buffer[50] = {0};
+DataEntry aggregation_data_entry = {0};
+bool is_first_read = true;
 
 void setup() {
   Serial.begin(9600);
@@ -73,8 +75,7 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
-  if (Serial.available())
-  {
+  if (Serial.available()) {
     String message = Serial.readString();
     btSerial.print(message);
 
@@ -82,9 +83,32 @@ void loop() {
     Serial.println(message);
   }
 
-  if (btSerial.available()) 
-  {
+  if (btSerial.available()) {
     String message = btSerial.readString();
     Serial.println(message);
   }
+}
+
+void readTemperatureAndHumidity() {
+
+}
+
+void readNoiseLevel() {
+
+}
+
+void readVibrationLevel() {
+
+}
+
+void readBrightnessLevel() {
+
+}
+
+void readCounter() {
+
+}
+
+void readAlarmDisable() {
+  
 }
