@@ -4,6 +4,7 @@
 #include "humidity_sensor.h"
 #include "flame_sensor.h"
 #include "LED_array.h"
+#include <avr/wdt.h>
 
 typedef float float32_t;
 
@@ -88,26 +89,21 @@ void setup() {
 
   initBleModule();
 
-  if (has_error) return Serial.println("Initialization finished with an error");
   Serial.println("Finished initializing BLE");
   Serial.print("Current Device ID: ");
   Serial.println(device_id);
 }
 
+bool a = false;
 void loop() {
-  // if (has_error) return;
-  // put your main code here, to run repeatedly:
-  // uint8_t last_data_entry_point_id = 13
-  // aggregation_data_entry.id.timestamp = millis()
-  // mesh_node_data_buffer[++last_data_entry_point_id] = aggregation_data_entry
 
-  // GO TO SLAVE MODE
-  // delay(10000)
-  // GO TO MASTER MODE
-  // delay(3000)
-
-  
-
+  if (has_error) {
+    Serial.println("Detected global error, resetting");
+    Serial.println();
+    Serial.flush();
+    delay(100);
+    reset();
+  }
 
   if (Serial.available()) {
     String message = Serial.readString();
@@ -118,8 +114,6 @@ void loop() {
   }
 
   if (btSerial.available()) {
-    // String message = "";
-    // while (btSerial.available()) message += (char) btSerial.read();
     String message = btSerial.readString();
     Serial.println(message);
   }
@@ -163,4 +157,10 @@ void sendClean(String command) {
   btSerial.print(command);
 
   delay(50);
+}
+
+void reset() {
+  wdt_disable();
+  wdt_enable(WDTO_15MS);
+  while (1) {}
 }
