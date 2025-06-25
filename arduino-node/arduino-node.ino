@@ -15,19 +15,18 @@ typedef struct {
   uint16_t timestamp;
 } DataId;
 
-millis()
-
 typedef struct {
   uint8_t has_temperature : 1;
   uint8_t has_humidity_level : 1;
   uint8_t has_noise_level : 1;
   uint8_t has_vibration_level : 1;
   uint8_t has_brightness_level : 1;
+  uint8_t has_co2_level : 1;
   uint8_t has_counter : 1;
   uint8_t has_flame_status : 1;
   uint8_t has_alarm_state : 1;
 
-  uint16_t reserved : 9;
+  uint16_t reserved : 8;
 } FieldsStatuses;
 
 typedef enum {
@@ -71,6 +70,7 @@ typedef struct {
   uint16_t noise_level;
   uint16_t vibration_level;
   uint16_t brightness_level;
+  uint16_t co2_level;
   uint16_t counter;
   bool flame_detected;
   AlarmStatus alarm_state;
@@ -79,16 +79,23 @@ typedef struct {
 DataEntry mesh_node_data_buffer[50] = {0};
 DataEntry aggregation_data_entry = {0};
 bool is_first_read = true;
+uint16_t device_id = 0; // Update to BLE module last 2 bytes of MAC
+bool has_error = false;
 
 void setup() {
   Serial.begin(9600);
   btSerial.begin(9600);
-  initHumidityTemperatureSensor();
-  initBuzzer();
-  initLedArray();
+
+  initBleModule();
+
+  if (has_error) return Serial.println("Initialization finished with an error");
+  Serial.println("Finished initializing BLE");
+  Serial.print("Current Device ID: ");
+  Serial.println(device_id);
 }
 
 void loop() {
+  // if (has_error) return;
   // put your main code here, to run repeatedly:
   // uint8_t last_data_entry_point_id = 13
   // aggregation_data_entry.id.timestamp = millis()
@@ -111,37 +118,49 @@ void loop() {
   }
 
   if (btSerial.available()) {
+    // String message = "";
+    // while (btSerial.available()) message += (char) btSerial.read();
     String message = btSerial.readString();
     Serial.println(message);
   }
   
 }
 
-void readTemperatureAndHumidity() {
-  aggregation_data_entry.temperature = readTemperature();
-  aggregation_data_entry.humidity_level = readHumidity();
+void initBleModule() {
+  sendClean("AT");
+  sendClean("AT+RENEW");
+  sendClean("AT+CLEAR");
+  sendClean("AT+ROLE1");
+  sendClean("AT+IMME1");
+  sendClean("AT+SHOW0");
+
+  sendClean("AT+ADDR?");
+  char address_response[20];
+  size_t bytes = btSerial.readBytes(address_response, 20);
+  if (bytes != 20) {
+    Serial.print("Failed to obtain BLE MAC address, recevied bytes: ");
+    Serial.println(bytes);
+    has_error = true;
+    return;
+  }
+
+  char* end_pointer;
+  long mac_result = strtol(&address_response[15], &end_pointer, 16);
+
+  if (end_pointer == address_response[20]) {
+    Serial.println("Error: No conversion performed");
+    return 0;
+  }
+
+  device_id = mac_result;
 }
 
-void readNoiseLevel() {
-  
-}
+void sendClean(String command) {
+  // Clear unread bytes
+  while (btSerial.available()) btSerial.read();
 
-void readVibrationLevel() {
+  // Send command
+  btSerial.print(command);
 
-}
-
-void readBrightnessLevel() {
-
-}
-
-void readCounter() {
-
-}
-
-void readAlarmDisable() {
-  
-}
-
-void readFlameStatus() {
-  aggregation_data_entry.flame_detected = isFlameDetected();
+  delay(50);
 }
