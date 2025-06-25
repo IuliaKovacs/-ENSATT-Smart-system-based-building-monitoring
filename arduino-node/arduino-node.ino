@@ -6,8 +6,9 @@
 #include "LED_array.h"
 #include <avr/wdt.h>
 
-typedef float float32_t;
+const String MESH_NODES[] = {"685E1C1A68CF", "685E1C1A5A30"};
 
+typedef float float32_t;
 
 SoftwareSerial btSerial(10, 9);
 
@@ -147,9 +148,13 @@ void initBleModule() {
   }
 
   device_id = mac_result;
+
+  char board_name[128];
+  sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
+  sendClean(board_name);
 }
 
-void sendClean(String command) {
+void sendClean(const char* command) {
   // Clear unread bytes
   while (btSerial.available()) btSerial.read();
 
