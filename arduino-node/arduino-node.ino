@@ -1,4 +1,3 @@
-#include <SoftwareSerial.h>
 #include <Wire.h>
 #include "light_sensor.h"
 #include "Gas_sensor.h"
@@ -10,11 +9,21 @@
 #include "vibration_sensor.h"
 #include <avr/wdt.h>
 
-const String MESH_NODES[] = {"685E1C1A68CF", "685E1C1A5A30"};
+// Increase RX buffer size to fit all responses without overwrite
+#define _SS_MAX_RX_BUFF 256
+#include <SoftwareSerial.h>
+
+#define AT_RESPONSE_DELAY 100
+#define AT_ASYNC_RESPONSE_DELAY 500
+
+void sendClean(const char* command, bool blocking_delay = false);
+
+const uint16_t NODES_COUNT = 2;
+const String MESH_NODES[NODES_COUNT] = {"685E1C1A68CF", "685E1C1A5A30"};
 
 typedef float float32_t;
 
-SoftwareSerial btSerial(10, 9);
+SoftwareSerial bt_serial(10, 9);
 
 typedef struct {
   uint16_t device_id;
@@ -85,15 +94,36 @@ typedef struct {
   AlarmStatus alarm_state;
 } DataEntry;
 
-DataEntry mesh_node_data_buffer[50] = {0};
-DataEntry aggregation_data_entry = {0};
+typedef enum {
+  BLE_STATE_MACHINE_IDLE,
+  BLE_STATE_MACHINE_START_MASTER,
+  BLE_STATE_MACHINE_DISCOVERY_STATE,
+  
+  BLE_STATE_MACHINE_MASTER_CONNECT,
+  BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES,
+  BLE_STATE_MACHINE_PUSH_REMOTE_MISSING,
+  BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING,
+
+  BLE_STATE_MACHINE_START_SLAVE,
+
+  BLE_STATE_MACHINE_CONNECT_1,
+
+  BLE_STATE_MACHINE_DEBUG,
+} BleStateMachine;
+
+static DataEntry mesh_node_data_buffer[20];
+DataEntry aggregation_data_entry;
 bool is_first_read = true;
 uint16_t device_id = 0; // Update to BLE module last 2 bytes of MAC
-bool has_error = false;
+
+String panic_error = "";
+
+BleStateMachine ble_state_machine = BLE_STATE_MACHINE_IDLE;
+uint16_t ble_state_machine_time = 0;
 
 void setup() {
   Serial.begin(9600);
-  btSerial.begin(9600);
+  bt_serial.begin(9600);
 
   initBleModule();
 
@@ -114,51 +144,208 @@ void setup() {
 bool a = false;
 void loop() {
 
-  // if (has_error) {
-  //   Serial.println("Detected global error, resetting");
-  //   Serial.println();
-  //   Serial.flush();
-  //   delay(100);
-  //   reset();
-  // }
+  if (panic_error.length() > 0) {
+    Serial.print("Detected global error (resetting): ");
+    Serial.println(panic_error);
+    Serial.println();
+    Serial.flush();
+    delay(1000);
+    reset();
+  }
 
-  // if (Serial.available()) {
-  //   String message = Serial.readString();
-  //   btSerial.print(message);
+  switch (ble_state_machine) {
+    case BLE_STATE_MACHINE_IDLE:
+      Serial.println("Starting master");
 
-  //   Serial.print("> ");
-  //   Serial.println(message);
-  // }
+      sendClean("AT+ROLE1");
+      ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
+      ble_state_machine_time = millis();
 
-  // if (btSerial.available()) {
-  //   String message = btSerial.readString();
-  //   Serial.println(message);
-  // }
+      break;
+    case BLE_STATE_MACHINE_START_MASTER: {
+      if (millis() - ble_state_machine_time < 3000) break;
+      String role_change_response = readBtResponse();
+      if (role_change_response != "OK+Set:1") {
+        panic_error = String("Was not able to change BLE module role to master: ") + role_change_response;
+        return;
+      }
+      
+      Serial.println("Configured master, starting discovery");
+      sendClean("AT+DISC?");
+
+      ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
+      ble_state_machine_time = millis();
+      break;
+    }
+    case BLE_STATE_MACHINE_DISCOVERY_STATE: {
+      if (millis() - ble_state_machine_time < 10000) break;
+      String ble_discovery_response = readBtResponse();      
+
+      Serial.print("Received discovery response: ");
+      Serial.println(ble_discovery_response);
+
+      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+
+      break; 
+    }
+
+    case BLE_STATE_MACHINE_MASTER_CONNECT:
+      ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:
+      ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
+      ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING:
+
+      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+      ble_state_machine_time = millis();
+
+      break;
+
+    case BLE_STATE_MACHINE_DEBUG:
+      processSerialBle();
+      break;
+    default:
+      break;
+  }
+
+  
+}
+
+void processSerialBle() {
+  if (Serial.available()) {
+    String message = Serial.readString();
+    bt_serial.print(message);
+
+    Serial.print("> ");
+    Serial.println(message);
+  }
+
+  if (btSerial.available()) {
+    String message = btSerial.readString();
+    Serial.println(message);
+  }
 
   Serial.println("Reading values from sensors");
   readSensorsData();
   printAggregatedData();
   
+  if (panic_error.length() > 0) {
+    Serial.print("Detected global error (resetting): ");
+    Serial.println(panic_error);
+    Serial.println();
+    Serial.flush();
+    delay(1000);
+    reset();
+  }
+
+  switch (ble_state_machine) {
+    case BLE_STATE_MACHINE_IDLE:
+      Serial.println("Starting master");
+
+      sendClean("AT+ROLE1");
+      ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_START_MASTER: {
+      if (millis() - ble_state_machine_time < 3000) break;
+      String role_change_response = readBtResponse();
+      if (role_change_response != "OK+Set:1") {
+        panic_error = String("Was not able to change BLE module role to master: ") + role_change_response;
+        return;
+      }
+      
+      Serial.println("Configured master, starting discovery");
+      sendClean("AT+DISC?");
+
+      ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
+      ble_state_machine_time = millis();
+      break;
+    }
+    case BLE_STATE_MACHINE_DISCOVERY_STATE: {
+      if (millis() - ble_state_machine_time < 10000) break;
+      String ble_discovery_response = readBtResponse();      
+
+      Serial.print("Received discovery response: ");
+      Serial.println(ble_discovery_response);
+
+      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+
+      break; 
+    }
+
+    case BLE_STATE_MACHINE_MASTER_CONNECT:
+      ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:
+      ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
+      ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING:
+
+      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+      ble_state_machine_time = millis();
+
+      break;
+
+    case BLE_STATE_MACHINE_DEBUG:
+      processSerialBle();
+      break;
+    default:
+      break;
+  }
+
+  
+}
+
+void processSerialBle() {
+  if (Serial.available()) {
+    String message = Serial.readString();
+    bt_serial.print(message);
+
+    Serial.print("> ");
+    Serial.println(message);
+  }
+
+  if (bt_serial.available()) {
+    String message = bt_serial.readString();
+    Serial.println(message);
+  }
 }
 
 void initBleModule() {
-  sendClean("AT");
-  sendClean("AT+RENEW");
-  sendClean("AT+CLEAR");
-  sendClean("AT+ROLE1");
-  sendClean("AT+IMME1");
-  sendClean("AT+SHOW0");
+  sendClean("AT", true);
+  sendClean("AT+RENEW", true);
+  sendClean("AT+IMME1", true);
+  sendClean("AT+CLEAR", true);
+  sendClean("AT+ROLE1", true);
+  sendClean("AT+SHOW0", true);
 
-  sendClean("AT+ADDR?");
-  char address_response[20];
-  size_t bytes = btSerial.readBytes(address_response, 20);
-  if (bytes != 20) {
-    Serial.print("Failed to obtain BLE MAC address, recevied bytes: ");
-    Serial.println(bytes);
-    has_error = true;
+  sendClean("AT+ADDR?", true);
+  String address_response = readBtResponse();
+  if (!address_response.startsWith("OK+ADDR:")) {
+    panic_error = String("BLE initialization failed. Invalid response for address request: ") + address_response;
     return;
   }
-
+    
   char* end_pointer;
   long mac_result = strtol(&address_response[15], &end_pointer, 16);
 
@@ -172,16 +359,25 @@ void initBleModule() {
   char board_name[128];
   sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
   sendClean(board_name);
+  
+  delay(AT_ASYNC_RESPONSE_DELAY);
 }
 
-void sendClean(const char* command) {
+void sendClean(const char* command, bool blocking_delay = false) {
   // Clear unread bytes
-  while (btSerial.available()) btSerial.read();
+  while (bt_serial.available()) bt_serial.read();
 
   // Send command
-  btSerial.print(command);
+  bt_serial.print(command);
 
-  delay(50);
+  if (blocking_delay) delay(AT_RESPONSE_DELAY);
+}
+
+String readBtResponse() {
+  String message = "";
+  while (bt_serial.available()) message += (char)bt_serial.read();
+
+  return message;
 }
 
 void reset() {
