@@ -1,4 +1,3 @@
-#include <SoftwareSerial.h>
 #include <Wire.h>
 #include "buzzer_sensor.h"
 #include "humidity_sensor.h"
@@ -6,11 +5,15 @@
 #include "LED_array.h"
 #include <avr/wdt.h>
 
+// Increase RX buffer size to fit all responses without overwrite
+#define _SS_MAX_RX_BUFF 256
+#include <SoftwareSerial.h>
+
 const String MESH_NODES[] = {"685E1C1A68CF", "685E1C1A5A30"};
 
 typedef float float32_t;
 
-SoftwareSerial btSerial(10, 9);
+SoftwareSerial btSerial(10, 9, 100);
 
 typedef struct {
   uint16_t device_id;
@@ -78,8 +81,17 @@ typedef struct {
   AlarmStatus alarm_state;
 } DataEntry;
 
-DataEntry mesh_node_data_buffer[50] = {0};
-DataEntry aggregation_data_entry = {0};
+typedef enum {
+  STATE_MACHINE_IDLE;
+  STATE_MACHINE_START_MASTER;
+  STATE_MACHINE_DISCOVERY_STATE;
+  STATE_MACHINE_DISCOVERY_CHECK;
+
+  STATE_MACHINE_CONNECT_1;
+} StateMachine;
+
+static DataEntry mesh_node_data_buffer[20];
+DataEntry aggregation_data_entry;
 bool is_first_read = true;
 uint16_t device_id = 0; // Update to BLE module last 2 bytes of MAC
 bool has_error = false;
@@ -106,18 +118,22 @@ void loop() {
     reset();
   }
 
-  if (Serial.available()) {
-    String message = Serial.readString();
-    btSerial.print(message);
+  switch 
 
-    Serial.print("> ");
-    Serial.println(message);
-  }
 
-  if (btSerial.available()) {
-    String message = btSerial.readString();
-    Serial.println(message);
-  }
+
+  // if (Serial.available()) {
+  //   String message = Serial.readString();
+  //   btSerial.print(message);
+
+  //   Serial.print("> ");
+  //   Serial.println(message);
+  // }
+
+  // if (btSerial.available()) {
+  //   String message = btSerial.readString();
+  //   Serial.println(message);
+  // }
   
 }
 
@@ -161,7 +177,7 @@ void sendClean(const char* command) {
   // Send command
   btSerial.print(command);
 
-  delay(50);
+  delay(100);
 }
 
 void reset() {
