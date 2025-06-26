@@ -22,7 +22,7 @@ SoftwareSerial bt_serial(10, 9);
 
 typedef struct {
   uint16_t device_id;
-  uint16_t timestamp;
+  uint16_t counter;
 } DataId;
 
 typedef struct {
@@ -183,14 +183,25 @@ void loop() {
 
       uint16_t discovered_count = 0;
       for (uint16_t i = 0; i < NODES_COUNT; i++) {
-        String *current_node = &MESH_NODES[i];
-        if (ble_response.indexOf(current_node) == -1) continue;
+        const String *current_node = &MESH_NODES[i];
+
+        if (ble_response.indexOf(*current_node) == -1) continue;
 
         uint16_t j = 0;
         while (ble_discovered_nodes_ids[j] != -1) j++;
 
         discovered_count++;
         ble_discovered_nodes_ids[j] = i;
+      }
+
+      // Shuffle discovered ids array
+      for (uint16_t i = 0; i < NODES_COUNT; i++)
+      {
+        uint16_t j = random(NODES_COUNT);
+
+        uint16_t temp = ble_discovered_nodes_ids[i];
+        ble_discovered_nodes_ids[i] = ble_discovered_nodes_ids[j];
+        ble_discovered_nodes_ids[j] = temp;
       }
 
       Serial.print("Discovered mesh nodes: ");
