@@ -213,20 +213,51 @@ void loop() {
       break; 
     }
 
-    case BLE_STATE_MACHINE_MASTER_CONNECT:
-      ble_state_machine =  BLE_STATE_MACHINE_DEBUG;
-      break;
+    case BLE_STATE_MACHINE_MASTER_CONNECT: {
+      uint16_t i = 0;
+      while (i < NODES_COUNT && ble_discovered_nodes_ids[i] == -1) i++;
+
+      // Check there was left one more device to connect to
+      if (i >= NODES_COUNT) {
+        ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+        break;
+      }
+
+      const String *device_mac = &MESH_NODES[ble_discovered_nodes_ids[i]];
+      ble_discovered_nodes_ids[i] = -1;
+
+      Serial.print("Attempting to connect to the: ");
+      Serial.println(*device_mac);
+
+      String connection_command = "AT+CON";
+      connection_command += *device_mac;
+      sendClean(connection_command.c_str());
 
       ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
       ble_state_machine_time = millis();
 
       break;
-    case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:
+    }
+    case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:   
+
+      if (!ble_response.endsWith("OK+DISCE")) {
+        if (millis() - ble_state_machine_time > 15000) {
+          panic_error = "Discovery timeout, did not receive OK+DISCE";
+          return;
+        }     
+
+        while (bt_serial.available()) ble_response += (char)bt_serial.read();
+        break;
+      }     
+
       ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
       ble_state_machine_time = millis();
 
       break;
     case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
+      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+      break;
+
       ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
       ble_state_machine_time = millis();
 
