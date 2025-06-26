@@ -6,6 +6,6 @@
 #define FLAME_SENSOR_PIN 3
 
 void initFlameSensor();
-bool isFlameDetected();
+void readFlameSensor(bool *flameDetected);
 
 #endif

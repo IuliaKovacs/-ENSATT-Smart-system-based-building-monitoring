@@ -11,20 +11,20 @@ void initHumidityTemperatureSensor() {
     Serial.println("DHT11 sensor initialized!");
 }
 
-float readHumidity() {
-    float result = dht.readHumidity();
-    if (isnan(result)) {
+bool readHumiditySensor(float *result) {
+    *result = dht.readHumidity();
+    if (isnan(*result)) {
         Serial.println("Error! Failed to read the data from Humidity Sensor!");
-        return -1;
+        return false;
     }
-    return result;
+    return true;
 }
 
-float readTemperature() {
-    float result = dht.readTemperature();
-    if (isnan(result)) {
+bool readTemperatureSensor(float *result) {
+    *result = dht.readTemperature();
+    if (isnan(*result)) {
         Serial.println("Error! Failed to read the data from Temperature Sensor!");
-        return -1;
+        return false;
     }
-    return result;
+    return true;
 }

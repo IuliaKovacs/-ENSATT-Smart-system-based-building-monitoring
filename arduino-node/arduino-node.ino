@@ -1,8 +1,12 @@
 #include <Wire.h>
+#include "light_sensor.h"
+#include "Gas_sensor.h"
 #include "buzzer_sensor.h"
 #include "humidity_sensor.h"
 #include "flame_sensor.h"
 #include "LED_array.h"
+#include "sound_sensor.h"
+#include "vibration_sensor.h"
 #include <avr/wdt.h>
 
 // Increase RX buffer size to fit all responses without overwrite
@@ -77,12 +81,15 @@ typedef struct {
   
   float32_t temperature;
   float32_t humidity_level;
+  float32_t eCO2_level;
+  float32_t TVOC_level;
+  uint16_t light_level;
   uint16_t noise_level;
   uint16_t vibration_level;
   uint16_t brightness_level;
-  uint16_t co2_level;
   uint16_t counter;
   bool flame_detected;
+  bool earthquake_detected;
   AlarmStatus alarm_state;
 } DataEntry;
 
@@ -125,6 +132,15 @@ void setup() {
   Serial.println("Finished initializing BLE");
   Serial.print("Current Device ID: ");
   Serial.println(device_id);
+
+  initAirQuality();
+  initLightSensor();
+  initBuzzer();
+  initFlameSensor();
+  initHumidityTemperatureSensor();
+  initLedArray();
+  initVibrationSensor();
+  initSoundSensor();
 }
 
 bool a = false;
@@ -246,6 +262,101 @@ void processSerialBle() {
     Serial.println(message);
   }
 
+  if (btSerial.available()) {
+    String message = btSerial.readString();
+    Serial.println(message);
+  }
+
+  Serial.println("Reading values from sensors");
+  readSensorsData();
+  printAggregatedData();
+  
+  if (panic_error.length() > 0) {
+    Serial.print("Detected global error (resetting): ");
+    Serial.println(panic_error);
+    Serial.println();
+    Serial.flush();
+    delay(1000);
+    reset();
+  }
+
+  switch (ble_state_machine) {
+    case BLE_STATE_MACHINE_IDLE:
+      Serial.println("Starting master");
+
+      sendClean("AT+ROLE1");
+      ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_START_MASTER: {
+      if (millis() - ble_state_machine_time < 3000) break;
+      String role_change_response = readBtResponse();
+      if (role_change_response != "OK+Set:1") {
+        panic_error = String("Was not able to change BLE module role to master: ") + role_change_response;
+        return;
+      }
+      
+      Serial.println("Configured master, starting discovery");
+      sendClean("AT+DISC?");
+
+      ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
+      ble_state_machine_time = millis();
+      break;
+    }
+    case BLE_STATE_MACHINE_DISCOVERY_STATE: {
+      if (millis() - ble_state_machine_time < 10000) break;
+      String ble_discovery_response = readBtResponse();      
+
+      Serial.print("Received discovery response: ");
+      Serial.println(ble_discovery_response);
+
+      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+
+      break; 
+    }
+
+    case BLE_STATE_MACHINE_MASTER_CONNECT:
+      ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:
+      ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
+      ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
+      ble_state_machine_time = millis();
+
+      break;
+    case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING:
+
+      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+      ble_state_machine_time = millis();
+
+      break;
+
+    case BLE_STATE_MACHINE_DEBUG:
+      processSerialBle();
+      break;
+    default:
+      break;
+  }
+
+  
+}
+
+void processSerialBle() {
+  if (Serial.available()) {
+    String message = Serial.readString();
+    bt_serial.print(message);
+
+    Serial.print("> ");
+    Serial.println(message);
+  }
+
   if (bt_serial.available()) {
     String message = bt_serial.readString();
     Serial.println(message);
@@ -323,4 +434,29 @@ void reset() {
   wdt_disable();
   wdt_enable(WDTO_15MS);
   while (1) {}
+}
+
+
+void readSensorsData() {
+  readAirQuality(&aggregation_data_entry.eCO2_level, &aggregation_data_entry.TVOC_level);
+  readLightLevel(&aggregation_data_entry.light_level);
+  readFlameSensor(&aggregation_data_entry.flame_detected);
+  readHumiditySensor(&aggregation_data_entry.humidity_level);
+  readTemperatureSensor(&aggregation_data_entry.temperature);
+  readSoundLevel(&aggregation_data_entry.noise_level);
+  readVibrationSensor(&aggregation_data_entry.earthquake_detected);
+  delay(1000);
+  //@ToDo - measure the time needed for all readings
+}
+
+
+void printAggregatedData(){
+  Serial.print("light level: "); Serial.println(aggregation_data_entry.light_level);
+  Serial.print("TVOC level: "); Serial.println(aggregation_data_entry.TVOC_level);
+  Serial.print("eCO2 level: "); Serial.println(aggregation_data_entry.eCO2_level);
+  Serial.print("flame_detected: "); Serial.println(aggregation_data_entry.flame_detected);
+  Serial.print("humidity_level: "); Serial.println(aggregation_data_entry.humidity_level);
+  Serial.print("temperature: "); Serial.println(aggregation_data_entry.temperature);
+  Serial.print("noise_level: "); Serial.println(aggregation_data_entry.noise_level);
+  Serial.print("earthquake_detected: "); Serial.println(aggregation_data_entry.earthquake_detected);
 }
