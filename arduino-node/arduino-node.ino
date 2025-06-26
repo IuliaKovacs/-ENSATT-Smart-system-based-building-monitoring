@@ -10,7 +10,6 @@
 #include <SoftwareSerial.h>
 
 #define AT_RESPONSE_DELAY 100
-#define AT_ASYNC_RESPONSE_DELAY 500
 
 void sendClean(const char* command, bool blocking_delay = false);
 
@@ -113,10 +112,13 @@ String panic_error = "";
 
 BleStateMachine ble_state_machine = BLE_STATE_MACHINE_IDLE;
 uint16_t ble_state_machine_time = 0;
+String ble_response = "";
+uint16_t ble_discovered_nodes_ids[NODES_COUNT] = {-1};
 
 void setup() {
   Serial.begin(9600);
   bt_serial.begin(9600);
+  randomSeed(analogRead(0));
 
   initBleModule();
 
@@ -147,10 +149,11 @@ void loop() {
 
       break;
     case BLE_STATE_MACHINE_START_MASTER: {
-      if (millis() - ble_state_machine_time < 3000) break;
-      String role_change_response = readBtResponse();
-      if (role_change_response != "OK+Set:1") {
-        panic_error = String("Was not able to change BLE module role to master: ") + role_change_response;
+      if (millis() - ble_state_machine_time < 1000) break;
+
+      String at_response = readBtResponse();
+      if (at_response != "OK+Set:1") {
+        panic_error = "Failed to change BLE module to master";
         return;
       }
       
@@ -159,21 +162,50 @@ void loop() {
 
       ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
       ble_state_machine_time = millis();
+      ble_response = "";
       break;
     }
     case BLE_STATE_MACHINE_DISCOVERY_STATE: {
-      if (millis() - ble_state_machine_time < 10000) break;
-      String ble_discovery_response = readBtResponse();      
+      if (!ble_response.endsWith("OK+DISCE")) {
+        if (millis() - ble_state_machine_time > 15000) {
+          panic_error = "Discovery timeout, did not receive OK+DISCE";
+          return;
+        }     
+
+        while (bt_serial.available()) ble_response += (char)bt_serial.read();
+        break;
+      }
 
       Serial.print("Received discovery response: ");
-      Serial.println(ble_discovery_response);
+      Serial.println(ble_response);
 
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+      for (int i = 0; i < NODES_COUNT; i++) ble_discovered_nodes_ids[i] = -1;
+
+      uint16_t discovered_count = 0;
+      for (uint16_t i = 0; i < NODES_COUNT; i++) {
+        String *current_node = &MESH_NODES[i];
+        if (ble_response.indexOf(current_node) == -1) continue;
+
+        uint16_t j = 0;
+        while (ble_discovered_nodes_ids[j] != -1) j++;
+
+        discovered_count++;
+        ble_discovered_nodes_ids[j] = i;
+      }
+
+      Serial.print("Discovered mesh nodes: ");
+      Serial.println(discovered_count);
+
+      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+      ble_state_machine_time = millis();
 
       break; 
     }
 
     case BLE_STATE_MACHINE_MASTER_CONNECT:
+      ble_state_machine =  BLE_STATE_MACHINE_DEBUG;
+      break;
+
       ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
       ble_state_machine_time = millis();
 
@@ -222,16 +254,33 @@ void processSerialBle() {
 
 void initBleModule() {
   sendClean("AT", true);
+  if (readBtResponse() != "OK")
+    return panic_error = "Failed to execute AT";
+
   sendClean("AT+RENEW", true);
+  if (readBtResponse() != "OK+RENEW")
+    return panic_error = "Failed to execute AT+RENEW";
+
   sendClean("AT+IMME1", true);
+  if (readBtResponse() != "OK+Set:1")
+    return panic_error = "Failed to execute AT+IMME1";
+
   sendClean("AT+CLEAR", true);
+  if (readBtResponse() != "OK+CLEAR")
+    return panic_error = "Failed to execute AT+CLEAR";
+
   sendClean("AT+ROLE1", true);
+  if (readBtResponse() != "OK+Set:1")
+    return panic_error = "Failed to execute AT+ROLE1";
+
   sendClean("AT+SHOW0", true);
+  if (readBtResponse() != "OK+Set:0")
+    return panic_error = "Failed to execute AT+SHOW0";
 
   sendClean("AT+ADDR?", true);
   String address_response = readBtResponse();
   if (!address_response.startsWith("OK+ADDR:")) {
-    panic_error = String("BLE initialization failed. Invalid response for address request: ") + address_response;
+    panic_error = String("Invalid AT response for address request");
     return;
   }
     
@@ -247,9 +296,10 @@ void initBleModule() {
 
   char board_name[128];
   sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
-  sendClean(board_name);
-  
-  delay(AT_ASYNC_RESPONSE_DELAY);
+  sendClean(board_name, true);
+  if (!readBtResponse().startsWith("OK+Set:"))
+    return panic_error = "Failed to execute AT+SHOW0";
+
 }
 
 void sendClean(const char* command, bool blocking_delay = false) {
