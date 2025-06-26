@@ -219,6 +219,8 @@ void loop() {
 
       // Check there was left one more device to connect to
       if (i >= NODES_COUNT) {
+        Serial.println("No more discovered nodes, finishing master phase");
+
         ble_state_machine = BLE_STATE_MACHINE_DEBUG;
         break;
       }
@@ -231,24 +233,37 @@ void loop() {
 
       String connection_command = "AT+CON";
       connection_command += *device_mac;
+      connection_command[13] = '7';
       sendClean(connection_command.c_str());
 
       ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
       ble_state_machine_time = millis();
+      ble_response = "";
 
       break;
     }
     case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:   
 
-      if (!ble_response.endsWith("OK+DISCE")) {
+      if (!ble_response.startsWith("OK+CONNAOK+CONN")) {
         if (millis() - ble_state_machine_time > 15000) {
-          panic_error = "Discovery timeout, did not receive OK+DISCE";
+          panic_error = "Connection timeout, did not receive OK+CONNAOK+CONN";
           return;
         }     
 
         while (bt_serial.available()) ble_response += (char)bt_serial.read();
         break;
-      }     
+      }
+
+      // In case connection failed, ignore and move on to next node
+      if (ble_response != "OK+CONNAOK+CONN") {
+        Serial.println("Failed to connect to node, continuing");
+          
+        ble_state_machine_time = millis();
+        ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+        break;
+      }
+
+      Serial.println("Succesfully connected to node");
 
       ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
       ble_state_machine_time = millis();
