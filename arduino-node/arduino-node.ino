@@ -1,9 +1,13 @@
 #include <SoftwareSerial.h>
 #include <Wire.h>
+#include "light_sensor.h"
+#include "Gas_sensor.h"
 #include "buzzer_sensor.h"
 #include "humidity_sensor.h"
 #include "flame_sensor.h"
 #include "LED_array.h"
+#include "sound_sensor.h"
+#include "vibration_sensor.h"
 #include <avr/wdt.h>
 
 const String MESH_NODES[] = {"685E1C1A68CF", "685E1C1A5A30"};
@@ -69,12 +73,15 @@ typedef struct {
   
   float32_t temperature;
   float32_t humidity_level;
+  float32_t eCO2_level;
+  float32_t TVOC_level;
+  uint16_t light_level;
   uint16_t noise_level;
   uint16_t vibration_level;
   uint16_t brightness_level;
-  uint16_t co2_level;
   uint16_t counter;
   bool flame_detected;
+  bool earthquake_detected;
   AlarmStatus alarm_state;
 } DataEntry;
 
@@ -93,31 +100,44 @@ void setup() {
   Serial.println("Finished initializing BLE");
   Serial.print("Current Device ID: ");
   Serial.println(device_id);
+
+  initAirQuality();
+  initLightSensor();
+  initBuzzer();
+  initFlameSensor();
+  initHumidityTemperatureSensor();
+  initLedArray();
+  initVibrationSensor();
+  initSoundSensor();
 }
 
 bool a = false;
 void loop() {
 
-  if (has_error) {
-    Serial.println("Detected global error, resetting");
-    Serial.println();
-    Serial.flush();
-    delay(100);
-    reset();
-  }
+  // if (has_error) {
+  //   Serial.println("Detected global error, resetting");
+  //   Serial.println();
+  //   Serial.flush();
+  //   delay(100);
+  //   reset();
+  // }
 
-  if (Serial.available()) {
-    String message = Serial.readString();
-    btSerial.print(message);
+  // if (Serial.available()) {
+  //   String message = Serial.readString();
+  //   btSerial.print(message);
 
-    Serial.print("> ");
-    Serial.println(message);
-  }
+  //   Serial.print("> ");
+  //   Serial.println(message);
+  // }
 
-  if (btSerial.available()) {
-    String message = btSerial.readString();
-    Serial.println(message);
-  }
+  // if (btSerial.available()) {
+  //   String message = btSerial.readString();
+  //   Serial.println(message);
+  // }
+
+  Serial.println("Reading values from sensors");
+  readSensorsData();
+  printAggregatedData();
   
 }
 
@@ -168,4 +188,29 @@ void reset() {
   wdt_disable();
   wdt_enable(WDTO_15MS);
   while (1) {}
+}
+
+
+void readSensorsData() {
+  readAirQuality(&aggregation_data_entry.eCO2_level, &aggregation_data_entry.TVOC_level);
+  readLightLevel(&aggregation_data_entry.light_level);
+  readFlameSensor(&aggregation_data_entry.flame_detected);
+  readHumiditySensor(&aggregation_data_entry.humidity_level);
+  readTemperatureSensor(&aggregation_data_entry.temperature);
+  readSoundLevel(&aggregation_data_entry.noise_level);
+  readVibrationSensor(&aggregation_data_entry.earthquake_detected);
+  delay(1000);
+  //@ToDo - measure the time needed for all readings
+}
+
+
+void printAggregatedData(){
+  Serial.print("light level: "); Serial.println(aggregation_data_entry.light_level);
+  Serial.print("TVOC level: "); Serial.println(aggregation_data_entry.TVOC_level);
+  Serial.print("eCO2 level: "); Serial.println(aggregation_data_entry.eCO2_level);
+  Serial.print("flame_detected: "); Serial.println(aggregation_data_entry.flame_detected);
+  Serial.print("humidity_level: "); Serial.println(aggregation_data_entry.humidity_level);
+  Serial.print("temperature: "); Serial.println(aggregation_data_entry.temperature);
+  Serial.print("noise_level: "); Serial.println(aggregation_data_entry.noise_level);
+  Serial.print("earthquake_detected: "); Serial.println(aggregation_data_entry.earthquake_detected);
 }

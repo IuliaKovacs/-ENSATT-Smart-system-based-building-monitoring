@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 void initHumidityTemperatureSensor();
-float readHumidity();
-float readTemperature();
+bool readHumiditySensor(float *result);
+bool readTemperatureSensor(float *result);
 
 #endif

@@ -4,12 +4,12 @@ void initFlameSensor() {
     pinMode(FLAME_SENSOR_PIN, INPUT);
 }
 
-bool isFlameDetected() {
+void readFlameSensor(bool *flameDetected) {
     if (digitalRead(FLAME_SENSOR_PIN)){
-        return false;
+        *flameDetected = false;
     }
     else{
         Serial.println("!!! -- FLAME DETECTED -- !!!");
-        return true;
+        *flameDetected = true;
     }
 }
