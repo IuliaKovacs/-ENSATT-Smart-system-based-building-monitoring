@@ -1,8 +1,12 @@
 #include <Wire.h>
+#include "light_sensor.h"
+#include "Gas_sensor.h"
 #include "buzzer_sensor.h"
 #include "humidity_sensor.h"
 #include "flame_sensor.h"
 #include "LED_array.h"
+#include "sound_sensor.h"
+#include "vibration_sensor.h"
 #include <avr/wdt.h>
 
 // Increase RX buffer size to fit all responses without overwrite
@@ -10,6 +14,7 @@
 #include <SoftwareSerial.h>
 
 #define AT_RESPONSE_DELAY 100
+#define AT_ASYNC_RESPONSE_DELAY 500
 
 void sendClean(const char* command, bool blocking_delay = false);
 
@@ -22,7 +27,7 @@ SoftwareSerial bt_serial(10, 9);
 
 typedef struct {
   uint16_t device_id;
-  uint16_t counter;
+  uint16_t timestamp;
 } DataId;
 
 typedef struct {
@@ -77,12 +82,15 @@ typedef struct {
   
   float32_t temperature;
   float32_t humidity_level;
+  float32_t eCO2_level;
+  float32_t TVOC_level;
+  uint16_t light_level;
   uint16_t noise_level;
   uint16_t vibration_level;
   uint16_t brightness_level;
-  uint16_t co2_level;
   uint16_t counter;
   bool flame_detected;
+  bool earthquake_detected;
   AlarmStatus alarm_state;
 } DataEntry;
 
@@ -112,272 +120,304 @@ String panic_error = "";
 
 BleStateMachine ble_state_machine = BLE_STATE_MACHINE_IDLE;
 uint16_t ble_state_machine_time = 0;
-String ble_response = "";
-uint16_t ble_discovered_nodes_ids[NODES_COUNT] = {-1};
 
 void setup() {
   Serial.begin(9600);
   bt_serial.begin(9600);
-  randomSeed(analogRead(0));
 
-  initBleModule();
+  // initBleModule();
 
   Serial.println("Finished initializing BLE");
   Serial.print("Current Device ID: ");
   Serial.println(device_id);
+
+  
+  initLightSensor();
+  initBuzzer();
+  initAirQuality();
+  initFlameSensor();
+  initHumidityTemperatureSensor();
+  initLedArray();
+  initVibrationSensor();
+  initSoundSensor();
+
+  Serial.println("Im here");
 }
 
 bool a = false;
 void loop() {
 
-  if (panic_error.length() > 0) {
-    Serial.print("Detected global error (resetting): ");
-    Serial.println(panic_error);
-    Serial.println();
-    Serial.flush();
-    delay(1000);
-    reset();
-  }
+  // Serial.println("HEyYY");
+  //readSensorsData();
+  // Serial.println("2");
+  // printAggregatedData();
+  // Serial.println("3");
 
-  switch (ble_state_machine) {
-    case BLE_STATE_MACHINE_IDLE:
-      Serial.println("Starting master");
+  // if (panic_error.length() > 0) {
+  //   Serial.print("Detected global error (resetting): ");
+  //   Serial.println(panic_error);
+  //   Serial.println();
+  //   Serial.flush();
+  //   delay(1000);
+  //   reset();
+  // }
 
-      sendClean("AT+ROLE1");
-      ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
-      ble_state_machine_time = millis();
+  // switch (ble_state_machine) {
+  //   case BLE_STATE_MACHINE_IDLE:
+  //     Serial.println("Starting master");
 
-      break;
-    case BLE_STATE_MACHINE_START_MASTER: {
-      if (millis() - ble_state_machine_time < 1000) break;
+  //     sendClean("AT+ROLE1");
+  //     ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
+  //     ble_state_machine_time = millis();
 
-      String at_response = readBtResponse();
-      if (at_response != "OK+Set:1") {
-        panic_error = "Failed to change BLE module to master";
-        return;
-      }
+  //     break;
+  //   case BLE_STATE_MACHINE_START_MASTER: {
+  //     if (millis() - ble_state_machine_time < 3000) break;
+  //     String role_change_response = readBtResponse();
+  //     if (role_change_response != "OK+Set:1") {
+  //       panic_error = String("Was not able to change BLE module role to master: ") + role_change_response;
+  //       return;
+  //     }
       
-      Serial.println("Configured master, starting discovery");
-      sendClean("AT+DISC?");
+  //     Serial.println("Configured master, starting discovery");
+  //     sendClean("AT+DISC?");
 
-      ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
-      ble_state_machine_time = millis();
-      ble_response = "";
-      break;
-    }
-    case BLE_STATE_MACHINE_DISCOVERY_STATE: {
-      if (!ble_response.endsWith("OK+DISCE")) {
-        if (millis() - ble_state_machine_time > 15000) {
-          panic_error = "Discovery timeout, did not receive OK+DISCE";
-          return;
-        }     
+  //     ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
+  //     ble_state_machine_time = millis();
+  //     break;
+  //   }
+  //   case BLE_STATE_MACHINE_DISCOVERY_STATE: {
+  //     if (millis() - ble_state_machine_time < 10000) break;
+  //     String ble_discovery_response = readBtResponse();      
 
-        while (bt_serial.available()) ble_response += (char)bt_serial.read();
-        break;
-      }
+  //     Serial.print("Received discovery response: ");
+  //     Serial.println(ble_discovery_response);
 
-      Serial.print("Received discovery response: ");
-      Serial.println(ble_response);
+  //     ble_state_machine = BLE_STATE_MACHINE_DEBUG;
 
-      for (int i = 0; i < NODES_COUNT; i++) ble_discovered_nodes_ids[i] = -1;
+  //     break; 
+  //   }
 
-      uint16_t discovered_count = 0;
-      for (uint16_t i = 0; i < NODES_COUNT; i++) {
-        const String *current_node = &MESH_NODES[i];
+  //   case BLE_STATE_MACHINE_MASTER_CONNECT:
+  //     ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
+  //     ble_state_machine_time = millis();
 
-        if (ble_response.indexOf(*current_node) == -1) continue;
+  //     break;
+  //   case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:
+  //     ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
+  //     ble_state_machine_time = millis();
 
-        uint16_t j = 0;
-        while (ble_discovered_nodes_ids[j] != -1) j++;
+  //     break;
+  //   case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
+  //     ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
+  //     ble_state_machine_time = millis();
 
-        discovered_count++;
-        ble_discovered_nodes_ids[j] = i;
-      }
+  //     break;
+  //   case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING:
 
-      // Shuffle discovered ids array
-      for (uint16_t i = 0; i < NODES_COUNT; i++)
-      {
-        uint16_t j = random(NODES_COUNT);
+  //     ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+  //     ble_state_machine_time = millis();
 
-        uint16_t temp = ble_discovered_nodes_ids[i];
-        ble_discovered_nodes_ids[i] = ble_discovered_nodes_ids[j];
-        ble_discovered_nodes_ids[j] = temp;
-      }
+  //     break;
 
-      Serial.print("Discovered mesh nodes: ");
-      Serial.println(discovered_count);
-
-      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
-      ble_state_machine_time = millis();
-
-      break; 
-    }
-
-    case BLE_STATE_MACHINE_MASTER_CONNECT: {
-      uint16_t i = 0;
-      while (i < NODES_COUNT && ble_discovered_nodes_ids[i] == -1) i++;
-
-      // Check there was left one more device to connect to
-      if (i >= NODES_COUNT) {
-        Serial.println("No more discovered nodes, finishing master phase");
-
-        ble_state_machine = BLE_STATE_MACHINE_DEBUG;
-        break;
-      }
-
-      const String *device_mac = &MESH_NODES[ble_discovered_nodes_ids[i]];
-      ble_discovered_nodes_ids[i] = -1;
-
-      Serial.print("Attempting to connect to the: ");
-      Serial.println(*device_mac);
-
-      String connection_command = "AT+CON";
-      connection_command += *device_mac;
-      connection_command[13] = '7';
-      sendClean(connection_command.c_str());
-
-      ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
-      ble_state_machine_time = millis();
-      ble_response = "";
-
-      break;
-    }
-    case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:   
-
-      if (!ble_response.startsWith("OK+CONNAOK+CONN")) {
-        if (millis() - ble_state_machine_time > 15000) {
-          panic_error = "Connection timeout, did not receive OK+CONNAOK+CONN";
-          return;
-        }     
-
-        while (bt_serial.available()) ble_response += (char)bt_serial.read();
-        break;
-      }
-
-      // In case connection failed, ignore and move on to next node
-      if (ble_response != "OK+CONNAOK+CONN") {
-        Serial.println("Failed to connect to node, continuing");
-          
-        ble_state_machine_time = millis();
-        ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
-        break;
-      }
-
-      Serial.println("Succesfully connected to node");
-
-      ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
-      ble_state_machine_time = millis();
-
-      break;
-    case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
-      break;
-
-      ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
-      ble_state_machine_time = millis();
-
-      break;
-    case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING:
-
-      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
-      ble_state_machine_time = millis();
-
-      break;
-
-    case BLE_STATE_MACHINE_DEBUG:
-      processSerialBle();
-      break;
-    default:
-      break;
-  }
+  //   case BLE_STATE_MACHINE_DEBUG:
+  //     processSerialBle();
+  //     break;
+  //   default:
+  //     break;
+  // }
 
   
-}
 
-void processSerialBle() {
-  if (Serial.available()) {
-    String message = Serial.readString();
-    bt_serial.print(message);
 
-    Serial.print("> ");
-    Serial.println(message);
-  }
+// void processSerialBle() {
+//   if (Serial.available()) {
+//     String message = Serial.readString();
+//     bt_serial.print(message);
 
-  if (bt_serial.available()) {
-    String message = bt_serial.readString();
-    Serial.println(message);
-  }
-}
+//     Serial.print("> ");
+//     Serial.println(message);
+//   }
 
-void initBleModule() {
-  sendClean("AT", true);
-  if (readBtResponse() != "OK")
-    return panic_error = "Failed to execute AT";
+//   if (btSerial.available()) {
+//     String message = btSerial.readString();
+//     Serial.println(message);
+//   }
 
-  sendClean("AT+RENEW", true);
-  if (readBtResponse() != "OK+RENEW")
-    return panic_error = "Failed to execute AT+RENEW";
+   Serial.println("Reading values from sensors");
+   delay(1000);
+   readSensorsData();
+   delay(1000);
+   printAggregatedData();
+  delay(1000);  
+//   if (panic_error.length() > 0) {
+//     Serial.print("Detected global error (resetting): ");
+//     Serial.println(panic_error);
+//     Serial.println();
+//     Serial.flush();
+//     delay(1000);
+//     reset();
+//   }
 
-  sendClean("AT+IMME1", true);
-  if (readBtResponse() != "OK+Set:1")
-    return panic_error = "Failed to execute AT+IMME1";
+//   switch (ble_state_machine) {
+//     case BLE_STATE_MACHINE_IDLE:
+//       Serial.println("Starting master");
 
-  sendClean("AT+CLEAR", true);
-  if (readBtResponse() != "OK+CLEAR")
-    return panic_error = "Failed to execute AT+CLEAR";
+//       sendClean("AT+ROLE1");
+//       ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
+//       ble_state_machine_time = millis();
 
-  sendClean("AT+ROLE1", true);
-  if (readBtResponse() != "OK+Set:1")
-    return panic_error = "Failed to execute AT+ROLE1";
+//       break;
+//     case BLE_STATE_MACHINE_START_MASTER: {
+//       if (millis() - ble_state_machine_time < 3000) break;
+//       String role_change_response = readBtResponse();
+//       if (role_change_response != "OK+Set:1") {
+//         panic_error = String("Was not able to change BLE module role to master: ") + role_change_response;
+//         return;
+//       }
+      
+//       Serial.println("Configured master, starting discovery");
+//       sendClean("AT+DISC?");
 
-  sendClean("AT+SHOW0", true);
-  if (readBtResponse() != "OK+Set:0")
-    return panic_error = "Failed to execute AT+SHOW0";
+//       ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
+//       ble_state_machine_time = millis();
+//       break;
+//     }
+//     case BLE_STATE_MACHINE_DISCOVERY_STATE: {
+//       if (millis() - ble_state_machine_time < 10000) break;
+//       String ble_discovery_response = readBtResponse();      
 
-  sendClean("AT+ADDR?", true);
-  String address_response = readBtResponse();
-  if (!address_response.startsWith("OK+ADDR:")) {
-    panic_error = String("Invalid AT response for address request");
-    return;
-  }
+//       Serial.print("Received discovery response: ");
+//       Serial.println(ble_discovery_response);
+
+//       ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+
+//       break; 
+//     }
+
+//     case BLE_STATE_MACHINE_MASTER_CONNECT:
+//       ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
+//       ble_state_machine_time = millis();
+
+//       break;
+//     case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES:
+//       ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
+//       ble_state_machine_time = millis();
+
+//       break;
+//     case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING:
+//       ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
+//       ble_state_machine_time = millis();
+
+//       break;
+//     case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING:
+
+//       ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
+//       ble_state_machine_time = millis();
+
+//       break;
+
+//     case BLE_STATE_MACHINE_DEBUG:
+//       processSerialBle();
+//       break;
+//     default:
+//       break;
+//   }
+
+  
+ }
+
+// void processSerialBle() {
+//   if (Serial.available()) {
+//     String message = Serial.readString();
+//     bt_serial.print(message);
+
+//     Serial.print("> ");
+//     Serial.println(message);
+//   }
+
+//   if (bt_serial.available()) {
+//     String message = bt_serial.readString();
+//     Serial.println(message);
+//   }
+// }
+
+// void initBleModule() {
+//   sendClean("AT", true);
+//   sendClean("AT+RENEW", true);
+//   sendClean("AT+IMME1", true);
+//   sendClean("AT+CLEAR", true);
+//   sendClean("AT+ROLE1", true);
+//   sendClean("AT+SHOW0", true);
+
+//   sendClean("AT+ADDR?", true);
+//   String address_response = readBtResponse();
+//   if (!address_response.startsWith("OK+ADDR:")) {
+//     panic_error = String("BLE initialization failed. Invalid response for address request: ") + address_response;
+//     return;
+//   }
     
-  char* end_pointer;
-  long mac_result = strtol(&address_response[15], &end_pointer, 16);
+//   char* end_pointer;
+//   long mac_result = strtol(&address_response[15], &end_pointer, 16);
 
-  if (end_pointer == address_response[20]) {
-    Serial.println("Error: No conversion performed");
-    return 0;
-  }
+//   if (end_pointer == address_response[20]) {
+//     Serial.println("Error: No conversion performed");
+//     return 0;
+//   }
 
-  device_id = mac_result;
+//   device_id = mac_result;
 
-  char board_name[128];
-  sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
-  sendClean(board_name, true);
-  if (!readBtResponse().startsWith("OK+Set:"))
-    return panic_error = "Failed to execute AT+SHOW0";
+//   char board_name[128];
+//   sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
+//   sendClean(board_name);
+  
+//   delay(AT_ASYNC_RESPONSE_DELAY);
+// }
 
+// void sendClean(const char* command, bool blocking_delay = false) {
+//   // Clear unread bytes
+//   while (bt_serial.available()) bt_serial.read();
+
+//   // Send command
+//   bt_serial.print(command);
+
+//   if (blocking_delay) delay(AT_RESPONSE_DELAY);
+// }
+
+// String readBtResponse() {
+//   String message = "";
+//   while (bt_serial.available()) message += (char)bt_serial.read();
+
+//   return message;
+// }
+
+// void reset() {
+//   wdt_disable();
+//   wdt_enable(WDTO_15MS);
+//   while (1) {}
+// }
+
+
+void readSensorsData() {
+  readAirQuality(&aggregation_data_entry.eCO2_level, &aggregation_data_entry.TVOC_level);
+  readLightLevel(&aggregation_data_entry.light_level);
+  readFlameSensor(&aggregation_data_entry.flame_detected);
+  readHumiditySensor(&aggregation_data_entry.humidity_level);
+  readTemperatureSensor(&aggregation_data_entry.temperature);
+  readSoundLevel(&aggregation_data_entry.noise_level);
+  readVibrationSensor(&aggregation_data_entry.earthquake_detected);
+  delay(1000);
+  //@ToDo - measure the time needed for all readings
 }
 
-void sendClean(const char* command, bool blocking_delay = false) {
-  // Clear unread bytes
-  while (bt_serial.available()) bt_serial.read();
 
-  // Send command
-  bt_serial.print(command);
-
-  if (blocking_delay) delay(AT_RESPONSE_DELAY);
-}
-
-String readBtResponse() {
-  String message = "";
-  while (bt_serial.available()) message += (char)bt_serial.read();
-
-  return message;
-}
-
-void reset() {
-  wdt_disable();
-  wdt_enable(WDTO_15MS);
-  while (1) {}
+void printAggregatedData(){
+  Serial.print("light level: "); Serial.println(aggregation_data_entry.light_level);
+  Serial.print("TVOC level: "); Serial.println(aggregation_data_entry.TVOC_level);
+  Serial.print("eCO2 level: "); Serial.println(aggregation_data_entry.eCO2_level);
+  Serial.print("flame_detected: "); Serial.println(aggregation_data_entry.flame_detected);
+  Serial.print("humidity_level: "); Serial.println(aggregation_data_entry.humidity_level);
+  Serial.print("temperature: "); Serial.println(aggregation_data_entry.temperature);
+  Serial.print("noise_level: "); Serial.println(aggregation_data_entry.noise_level);
+  Serial.print("earthquake_detected: "); Serial.println(aggregation_data_entry.earthquake_detected);
 }

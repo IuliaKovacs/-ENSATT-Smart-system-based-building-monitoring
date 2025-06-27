@@ -5,7 +5,7 @@ void initFlameSensor() {
 }
 
 void readFlameSensor(bool *flameDetected) {
-    if (digitalRead(FLAME_SENSOR_PIN)){
+    if (digitalRead(FLAME_SENSOR_PIN) == LOW){
         *flameDetected = false;
     }
     else{
