@@ -89,6 +89,9 @@ typedef struct {
 
 typedef enum {
   BLE_STATE_MACHINE_IDLE,
+
+  BLE_STATE_MACHINE_SEND_AT,
+  BLE_STATE_MACHINE_WAIT_AT_RESPONSE,
   
   // Master flow
   BLE_STATE_MACHINE_INIT_MASTER,
@@ -126,6 +129,7 @@ uint16_t ble_discovered_nodes_ids[NODES_COUNT] = {-1};
 
 uint16_t slave_duration = 0;
 uint16_t slave_start_time = 0;
+BleStateMachine before_send_at_procedure = BLE_STATE_MACHINE_IDLE;
 
 void setup() {
   Serial.begin(9600);
@@ -153,25 +157,52 @@ void loop() {
 
   switch (ble_state_machine) {
     case BLE_STATE_MACHINE_IDLE: {
-      ble_state_machine = device_id & 0x01 ? 
-        BLE_STATE_MACHINE_INIT_MASTER : BLE_STATE_MACHINE_INIT_SLAVE;
-      ble_state_machine_time = millis();
+      updateStateMachine(device_id & 0x01 ? 
+        BLE_STATE_MACHINE_INIT_MASTER : BLE_STATE_MACHINE_INIT_SLAVE)
+      break;
+    }
+    case BLE_STATE_MACHINE_SEND_AT: {
+      Serial.println("Sending AT command");
+      sendClean("AT");
 
+      updateStateMachine(BLE_STATE_MACHINE_WAIT_AT_RESPONSE);
+      break;
+    }
+    case BLE_STATE_MACHINE_WAIT_AT_RESPONSE: {
+      if (!ble_response.startsWith("OK")) {
+        if (millis() - ble_state_machine_time > AT_LONG_RESPONSE_DELAY) {
+          panic_error = "AT command timeout, did't receive OK";
+          return;
+        }     
+
+        loadBleBytes();
+        break;
+      }
+
+      updateStateMachine(before_send_at_procedure);
       break;
     }
     case BLE_STATE_MACHINE_INIT_MASTER: {
       Serial.println("Starting master");
       sendClean("AT+ROLE1");
 
-      ble_state_machine = BLE_STATE_MACHINE_START_MASTER;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_START_MASTER);
       break;
     }
     case BLE_STATE_MACHINE_START_MASTER: {
+      if (!ble_response.startsWith("OK")) {
+        if (millis() - ble_state_machine_time > AT_LONG_RESPONSE_DELAY) {
+          panic_error = "AT command timeout, did't receive OK";
+          return;
+        }     
+
+        loadBleBytes();
+        break;
+      }
+
       if (millis() - ble_state_machine_time < AT_LONG_RESPONSE_DELAY) break;
 
-      String at_response = readBtResponse();
+      String at_response = loadBleBytes();
       if (at_response != "OK+Set:1") {
         panic_error = "Failed to change BLE module to master";
         return;
@@ -180,9 +211,7 @@ void loop() {
       Serial.println("Configured master, starting discovery");
       sendClean("AT+DISC?");
 
-      ble_state_machine = BLE_STATE_MACHINE_DISCOVERY_STATE;
-      ble_state_machine_time = millis();
-      ble_response = "";
+      updateStateMachine(BLE_STATE_MACHINE_DISCOVERY_STATE);
       break;
     }
     case BLE_STATE_MACHINE_DISCOVERY_STATE: {
@@ -192,7 +221,7 @@ void loop() {
           return;
         }     
 
-        while (bt_serial.available()) ble_response += (char)bt_serial.read();
+        loadBleBytes();
         break;
       }
 
@@ -227,9 +256,7 @@ void loop() {
       Serial.print("Discovered mesh nodes: ");
       Serial.println(discovered_count);
 
-      ble_state_machine = BLE_STATE_MACHINE_MASTER_INIT_CONNECT;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT)
       break; 
     }
     case BLE_STATE_MACHINE_MASTER_INIT_CONNECT: {
@@ -239,9 +266,7 @@ void loop() {
       // Check there was left one more device to connect to
       if (i >= NODES_COUNT) {
         Serial.println("No more discovered nodes, finishing master phase");
-
-        ble_state_machine = BLE_STATE_MACHINE_INIT_SLAVE;
-        ble_state_machine_time = millis();
+        updateStateMachine(BLE_STATE_MACHINE_INIT_SLAVE);
         break;
       }
 
@@ -255,10 +280,7 @@ void loop() {
       connection_command += *device_mac;
       sendClean(connection_command.c_str());
 
-      ble_state_machine = BLE_STATE_MACHINE_MASTER_CONNECT;
-      ble_state_machine_time = millis();
-      ble_response = "";
-
+      updateStateMachine(BLE_STATE_MACHINE_MASTER_CONNECT)
       break;
     }
     case BLE_STATE_MACHINE_MASTER_CONNECT: {
@@ -268,49 +290,38 @@ void loop() {
           return;
         }     
 
-        while (bt_serial.available()) ble_response += (char)bt_serial.read();
+        loadBleBytes();
         break;
       }
 
       // Detect F or E in case there were present
-      delay(10);
-      while (bt_serial.available()) ble_response += (char)bt_serial.read();
+      delay(5);
+      loadBleBytes();
 
       // In case connection failed, ignore and move on to next node
       if (ble_response != "OK+CONNAOK+CONN") {
         Serial.println("Failed to connect to node, continuing");
-
-        ble_state_machine_time = millis();
-        ble_state_machine = BLE_STATE_MACHINE_MASTER_INIT_CONNECT;
+        updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
         break;
       }
 
       Serial.println("Succesfully connected to node");
-
-      ble_state_machine = BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES);
       break;
     }
     case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES: {
-      ble_state_machine = BLE_STATE_MACHINE_PUSH_REMOTE_MISSING;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_PUSH_REMOTE_MISSING)
       break;
     }      
     case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING: {
-      startDebug();
+      startDebugProcedure();
       break;
 
-      ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
       break;
     }
     case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING: {
-      ble_state_machine = BLE_STATE_MACHINE_MASTER_INIT_CONNECT;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
       break;
     }
 
@@ -320,37 +331,33 @@ void loop() {
       Serial.println("Starting slave");
       sendClean("AT+ROLE0");
 
-      ble_state_machine = BLE_STATE_MACHINE_START_SLAVE;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_START_SLAVE)
       break;
     }
     case BLE_STATE_MACHINE_START_SLAVE: {
       if (millis() - ble_state_machine_time < AT_LONG_RESPONSE_DELAY) break;
 
-      String at_response = readBtResponse();
+      String at_response = loadBleBytes();
       if (at_response != "OK+Set:0") {
         Serial.println(at_response);
         panic_error = "Failed to change BLE module to slave";
         return;
       }
 
-      bt_serial.print("AT+START");
+      sendClean("AT+START");
 
       slave_duration = 25000 + random(15000);
       Serial.print("Configured slave, current phase duration: ");
       Serial.println(slave_duration);
       
-      ble_state_machine = BLE_STATE_MACHINE_START_ADVERTISMENT;
-      ble_state_machine_time = millis();
+      updateStateMachine(BLE_STATE_MACHINE_START_ADVERTISMENT);
       slave_start_time = millis();
-
       break;
     }
     case BLE_STATE_MACHINE_START_ADVERTISMENT: {
       if (millis() - ble_state_machine_time < AT_LONG_RESPONSE_DELAY) break;
 
-      String at_response = readBtResponse();
+      String at_response = loadBleBytes();
       if (at_response != "OK+START") {
         panic_error = "Failed to start advertising";
         return;
@@ -358,16 +365,13 @@ void loop() {
 
       Serial.println("Sucesfully started advertising, waiting for connections");
 
-      ble_response = "";
-      ble_state_machine = BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION;
-      ble_state_machine_time = millis();
-
+      updateStateMachine(BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION);
       break;
     }
     case BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION: {
       // Check if slave phase has ended
       if (millis() - slave_start_time >= slave_duration) {
-        ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+        startDebugProcedure();
         // ble_state_machine = BLE_STATE_MACHINE_INIT_MASTER;
         break;
       }
@@ -388,9 +392,19 @@ void loop() {
   }  
 }
 
-void startDebug() {
+void updateStateMachine(BleStateMachine new_procedure) {
+  ble_response = "";
+  ble_state_machine = BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION;
+  ble_state_machine_time = millis();
+}
+
+void loadBleBytes() {
+  while (bt_serial.available()) ble_response += (char)bt_serial.read();
+}
+
+void startDebugProcedure() {
   Serial.println("Starting debug logic...");
-  ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+  updateStateMachine(BLE_STATE_MACHINE_DEBUG);
 }
 
 void processSerialBle() {
