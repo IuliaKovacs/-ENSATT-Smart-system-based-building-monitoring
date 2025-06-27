@@ -116,7 +116,7 @@ typedef enum {
   BLE_STATE_MACHINE_DEBUG,
 } BleStateMachine;
 
-static DataEntry mesh_node_data_buffer[20];
+static DataEntry mesh_node_data_buffer[3];
 DataEntry aggregation_data_entry;
 bool is_first_read = true;
 uint16_t device_id = 0; // Update to BLE module last 2 bytes of MAC
@@ -166,6 +166,8 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_SEND_AT: {
+      if (getStateMachineMillis() < AT_LONG_RESPONSE_DELAY) break;
+
       Serial.println("Sending AT command");
       sendClean("AT");
 
@@ -174,7 +176,7 @@ void loop() {
     }
     case BLE_STATE_MACHINE_WAIT_AT_RESPONSE: {
       if (!ble_response.startsWith("OK")) {
-        if (millis() - ble_state_machine_time > AT_LONG_RESPONSE_DELAY) {
+        if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
           panic_error = "AT command timeout, did't receive OK";
           return;
         }     
@@ -182,7 +184,6 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (millis() - ble_state_machine_time < AT_LONG_RESPONSE_DELAY) break;
 
       Serial.println("Succesfully received AT response, returning");
       updateStateMachine(before_send_at_procedure);
@@ -197,7 +198,7 @@ void loop() {
     }
     case BLE_STATE_MACHINE_START_MASTER: {
       if (ble_response != "OK+Set:1") {
-        if (millis() - ble_state_machine_time > AT_LONG_RESPONSE_DELAY) {
+        if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
           panic_error = "Failed to change BLE module to master";
           return;
         }     
@@ -205,7 +206,7 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (millis() - ble_state_machine_time < 500) break;
+      if (getStateMachineMillis() < 500) break;
 
       Serial.println("Configured master, starting discovery");
       sendClean("AT+DISC?");
@@ -215,8 +216,7 @@ void loop() {
     }
     case BLE_STATE_MACHINE_DISCOVERY_STATE: {
       if (!ble_response.endsWith("OK+DISCE")) {
-        if (millis() - ble_state_machine_time > 15000) {
-          Serial.println(ble_response);
+        if (getStateMachineMillis() > 15000) {
           panic_error = "Discovery timeout, did not receive OK+DISCE";
           return;
         }     
@@ -224,7 +224,7 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (millis() - ble_state_machine_time < 500) break;
+      if (getStateMachineMillis() < 500) break;
 
       Serial.print("Received discovery response: ");
       Serial.println(ble_response);
@@ -286,7 +286,7 @@ void loop() {
     }
     case BLE_STATE_MACHINE_MASTER_CONNECT: {
       if (!ble_response.startsWith("OK+CONNAOK+CONN")) {
-        if (millis() - ble_state_machine_time > 15000) {
+        if (getStateMachineMillis() > 15000) {
           panic_error = "Connection timeout, did not receive OK+CONNAOK+CONN";
           return;
         }     
@@ -294,7 +294,7 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (millis() - ble_state_machine_time < 100) break;
+      if (getStateMachineMillis() < 100) break;
 
       // Detect F or E in case there were present
       delay(5);
@@ -338,7 +338,7 @@ void loop() {
     }
     case BLE_STATE_MACHINE_START_SLAVE: {
       if (ble_response != "OK+Set:0") {
-        if (millis() - ble_state_machine_time > AT_LONG_RESPONSE_DELAY) {
+        if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
           panic_error = "Was not able to set slave role";
           return;
         }     
@@ -364,7 +364,7 @@ void loop() {
     }
     case BLE_STATE_MACHINE_START_ADVERTISMENT: {
       if (ble_response != "OK+START") {
-        if (millis() - ble_state_machine_time > AT_LONG_RESPONSE_DELAY) {
+        if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
           panic_error = "Failed to start advertising";
           return;
         }     
@@ -381,9 +381,11 @@ void loop() {
       // Check if slave phase has ended
       if (millis() - slave_start_time >= slave_duration) {
         startDebugProcedure();
-        // ble_state_machine = BLE_STATE_MACHINE_INIT_MASTER;
+        // sendAtCommand(BLE_STATE_MACHINE_INIT_MASTER)
         break;
       }
+
+
 
       // startDebug();
       // break;
@@ -399,6 +401,10 @@ void loop() {
     default:
       break;
   }  
+}
+
+uint16_t getStateMachineMillis() {
+  return millis() - ble_state_machine_time;
 }
 
 void sendAtCommand(BleStateMachine callback_procedure) {
