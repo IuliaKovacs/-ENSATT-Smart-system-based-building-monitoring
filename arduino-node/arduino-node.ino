@@ -152,19 +152,14 @@ void loop() {
   }
 
   switch (ble_state_machine) {
-    case BLE_STATE_MACHINE_IDLE:
-
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
-      break;
-
-
+    case BLE_STATE_MACHINE_IDLE: {
       ble_state_machine = device_id & 0x01 ? 
         BLE_STATE_MACHINE_INIT_MASTER : BLE_STATE_MACHINE_INIT_SLAVE;
       ble_state_machine_time = millis();
 
       break;
-
-    case BLE_STATE_MACHINE_INIT_MASTER:
+    }
+    case BLE_STATE_MACHINE_INIT_MASTER: {
       Serial.println("Starting master");
       sendClean("AT+ROLE1");
 
@@ -172,7 +167,7 @@ void loop() {
       ble_state_machine_time = millis();
 
       break;
-
+    }
     case BLE_STATE_MACHINE_START_MASTER: {
       if (millis() - ble_state_machine_time < AT_LONG_RESPONSE_DELAY) break;
 
@@ -245,7 +240,8 @@ void loop() {
       if (i >= NODES_COUNT) {
         Serial.println("No more discovered nodes, finishing master phase");
 
-        ble_state_machine = BLE_STATE_MACHINE_START_SLAVE;
+        ble_state_machine = BLE_STATE_MACHINE_INIT_SLAVE;
+        ble_state_machine_time = millis();
         break;
       }
 
@@ -303,7 +299,7 @@ void loop() {
       break;
     }      
     case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING: {
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+      startDebug();
       break;
 
       ble_state_machine = BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING;
@@ -339,8 +335,7 @@ void loop() {
         return;
       }
 
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
-      break;
+      bt_serial.print("AT+START");
 
       slave_duration = 25000 + random(15000);
       Serial.print("Configured slave, current phase duration: ");
@@ -354,10 +349,6 @@ void loop() {
     }
     case BLE_STATE_MACHINE_START_ADVERTISMENT: {
       if (millis() - ble_state_machine_time < AT_LONG_RESPONSE_DELAY) break;
-
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
-      break;
-
 
       String at_response = readBtResponse();
       if (at_response != "OK+START") {
@@ -374,15 +365,15 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION: {
-      Serial.println("Waiting for the new connection");
-
+      // Check if slave phase has ended
       if (millis() - slave_start_time >= slave_duration) {
         ble_state_machine = BLE_STATE_MACHINE_DEBUG;
+        // ble_state_machine = BLE_STATE_MACHINE_INIT_MASTER;
         break;
       }
 
-      ble_state_machine = BLE_STATE_MACHINE_DEBUG;
-      break;
+      // startDebug();
+      // break;
 
       break;
     }
@@ -395,6 +386,11 @@ void loop() {
     default:
       break;
   }  
+}
+
+void startDebug() {
+  Serial.println("Starting debug logic...");
+  ble_state_machine = BLE_STATE_MACHINE_DEBUG;
 }
 
 void processSerialBle() {
