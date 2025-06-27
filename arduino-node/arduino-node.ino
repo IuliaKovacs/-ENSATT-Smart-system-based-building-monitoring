@@ -139,8 +139,8 @@ void setup() {
 
   initBleModule();
 
-  Serial.println("Finished initializing BLE");
-  Serial.print("Current Device ID: ");
+  Serial.println("BLE Good");
+  Serial.print("ID: ");
   Serial.println(device_id);
 }
 
@@ -168,7 +168,7 @@ void loop() {
     case BLE_STATE_MACHINE_SEND_AT: {
       if (getStateMachineMillis() < AT_LONG_RESPONSE_DELAY) break;
 
-      Serial.println("Sending AT command");
+      Serial.println("Sending AT");
       sendClean("AT");
 
       updateStateMachine(BLE_STATE_MACHINE_WAIT_AT_RESPONSE);
@@ -177,7 +177,7 @@ void loop() {
     case BLE_STATE_MACHINE_WAIT_AT_RESPONSE: {
       if (!ble_response.startsWith("OK")) {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          panic_error = "AT command timeout, did't receive OK";
+          panic_error = "AT Failed";
           return;
         }     
 
@@ -185,12 +185,12 @@ void loop() {
         break;
       }
 
-      Serial.println("Succesfully received AT response, returning");
+      Serial.println("Received AT");
       updateStateMachine(before_send_at_procedure);
       break;
     }
     case BLE_STATE_MACHINE_INIT_MASTER: {
-      Serial.println("Starting master");
+      Serial.println("Starting MASTER");
       sendClean("AT+ROLE1");
 
       updateStateMachine(BLE_STATE_MACHINE_START_MASTER);
@@ -199,16 +199,16 @@ void loop() {
     case BLE_STATE_MACHINE_START_MASTER: {
       if (ble_response != "OK+Set:1") {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          panic_error = "Failed to change BLE module to master";
+          panic_error = "Failed start MASTER";
           return;
         }     
 
         loadBleBytes();
         break;
       }
-      if (getStateMachineMillis() < 500) break;
+      if (getStateMachineMillis() < 1000) break;
 
-      Serial.println("Configured master, starting discovery");
+      Serial.println("MASTER Good");
       sendClean("AT+DISC?");
 
       updateStateMachine(BLE_STATE_MACHINE_DISCOVERY_STATE);
@@ -217,7 +217,7 @@ void loop() {
     case BLE_STATE_MACHINE_DISCOVERY_STATE: {
       if (!ble_response.endsWith("OK+DISCE")) {
         if (getStateMachineMillis() > 15000) {
-          panic_error = "Discovery timeout, did not receive OK+DISCE";
+          panic_error = "Failed discovery";
           return;
         }     
 
@@ -225,9 +225,6 @@ void loop() {
         break;
       }
       if (getStateMachineMillis() < 500) break;
-
-      Serial.print("Received discovery response: ");
-      Serial.println(ble_response);
 
       for (int i = 0; i < NODES_COUNT; i++) ble_discovered_nodes_ids[i] = -1;
 
@@ -254,7 +251,7 @@ void loop() {
         ble_discovered_nodes_ids[j] = temp;
       }
 
-      Serial.print("Discovered mesh nodes: ");
+      Serial.print("Discovered nodes: ");
       Serial.println(discovered_count);
 
       updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
@@ -266,7 +263,7 @@ void loop() {
 
       // Check there was left one more device to connect to
       if (i >= NODES_COUNT) {
-        Serial.println("No more discovered nodes, finishing master phase");
+        Serial.println("Finish MASTER");
         updateStateMachine(BLE_STATE_MACHINE_INIT_SLAVE);
         break;
       }
@@ -274,7 +271,7 @@ void loop() {
       const String *device_mac = &MESH_NODES[ble_discovered_nodes_ids[i]];
       ble_discovered_nodes_ids[i] = -1;
 
-      Serial.print("Attempting to connect to the: ");
+      Serial.print("Connecting to: ");
       Serial.println(*device_mac);
 
       String connection_command = "AT+CON";
@@ -287,7 +284,7 @@ void loop() {
     case BLE_STATE_MACHINE_MASTER_CONNECT: {
       if (!ble_response.startsWith("OK+CONNAOK+CONN")) {
         if (getStateMachineMillis() > 15000) {
-          panic_error = "Connection timeout, did not receive OK+CONNAOK+CONN";
+          panic_error = "Failed connect";
           return;
         }     
 
@@ -302,12 +299,12 @@ void loop() {
 
       // In case connection failed, ignore and move on to next node
       if (ble_response != "OK+CONNAOK+CONN") {
-        Serial.println("Failed to connect to node, continuing");
+        Serial.println("Failed connect");
         updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
         break;
       }
 
-      Serial.println("Succesfully connected to node");
+      Serial.println("Connected");
       updateStateMachine(BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES);
       break;
     }
@@ -330,7 +327,7 @@ void loop() {
     // SLAVE LOGIC
 
     case BLE_STATE_MACHINE_INIT_SLAVE: {
-      Serial.println("Starting slave");
+      Serial.println("Starting SLAVE");
       sendClean("AT+ROLE0");
 
       updateStateMachine(BLE_STATE_MACHINE_START_SLAVE);
@@ -339,7 +336,7 @@ void loop() {
     case BLE_STATE_MACHINE_START_SLAVE: {
       if (ble_response != "OK+Set:0") {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          panic_error = "Was not able to set slave role";
+          panic_error = "Failed start SLAVE";
           return;
         }     
 
@@ -348,7 +345,7 @@ void loop() {
       }
 
       slave_duration = 15000 + random(15000);
-      Serial.print("Configured slave, current phase duration: ");
+      Serial.print("SLAVE good: ");
       Serial.println(slave_duration);
       
       sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
@@ -356,7 +353,7 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_INIT_ADVERTISMENT: {
-      Serial.println("Starting advertisment");
+      Serial.println("Adv started");
       sendClean("AT+START");
 
       updateStateMachine(BLE_STATE_MACHINE_START_ADVERTISMENT);
@@ -365,7 +362,7 @@ void loop() {
     case BLE_STATE_MACHINE_START_ADVERTISMENT: {
       if (ble_response != "OK+START") {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          panic_error = "Failed to start advertising";
+          panic_error = "Failed adv";
           return;
         }     
 
@@ -373,7 +370,7 @@ void loop() {
         break;
       }
 
-      Serial.println("Sucesfully started advertising, waiting for connections");
+      Serial.println("Adv Good");
       updateStateMachine(BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION);
       break;
     }
@@ -423,7 +420,7 @@ void loadBleBytes() {
 }
 
 void startDebugProcedure() {
-  Serial.println("Starting debug logic...");
+  Serial.println("#DEBUG#");
   updateStateMachine(BLE_STATE_MACHINE_DEBUG);
 }
 
@@ -445,32 +442,32 @@ void processSerialBle() {
 void initBleModule() {
   sendClean("AT", true);
   if (readBtResponse() != "OK")
-    return panic_error = "Failed to execute AT";
+    return panic_error = "Failed AT";
 
   sendClean("AT+RENEW", true);
   if (readBtResponse() != "OK+RENEW")
-    return panic_error = "Failed to execute AT+RENEW";
+    return panic_error = "Failed RENEW";
 
   sendClean("AT+IMME1", true);
   if (readBtResponse() != "OK+Set:1")
-    return panic_error = "Failed to execute AT+IMME1";
+    return panic_error = "Failed IMME";
 
   sendClean("AT+CLEAR", true);
   if (readBtResponse() != "OK+CLEAR")
-    return panic_error = "Failed to execute AT+CLEAR";
+    return panic_error = "Failed CLEAR";
 
   sendClean("AT+ROLE1", true);
   if (readBtResponse() != "OK+Set:1")
-    return panic_error = "Failed to execute AT+ROLE1";
+    return panic_error = "Failed ROLE";
 
   sendClean("AT+SHOW0", true);
   if (readBtResponse() != "OK+Set:0")
-    return panic_error = "Failed to execute AT+SHOW0";
+    return panic_error = "Failed SHOW";
 
   sendClean("AT+ADDR?", true);
   String address_response = readBtResponse();
   if (!address_response.startsWith("OK+ADDR:")) {
-    panic_error = String("Invalid AT response for address request");
+    panic_error = String("Failed ADDR");
     return;
   }
     
@@ -478,7 +475,7 @@ void initBleModule() {
   long mac_result = strtol(&address_response[15], &end_pointer, 16);
 
   if (end_pointer == address_response[20]) {
-    Serial.println("Error: No conversion performed");
+    Serial.println("Failed ADDR parse");
     return 0;
   }
 
@@ -488,7 +485,7 @@ void initBleModule() {
   sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
   sendClean(board_name, true);
   if (!readBtResponse().startsWith("OK+Set:"))
-    return panic_error = "Failed to execute AT+SHOW0";
+    return panic_error = "Failed name";
   
   delay(300);
 }
