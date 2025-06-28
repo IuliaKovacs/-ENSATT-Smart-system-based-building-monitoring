@@ -453,14 +453,14 @@ void loop() {
           bool have_found = false;
 
           for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
-            const DataEntry *current_entry = &mesh_node_data_buffer[i];
+            const DataEntry *local_entry = &mesh_node_data_buffer[i];
 
-            if (request_id->device_id == current_entry->id.device_id &&
-                  request_id->counter == current_entry->id.counter) {
+            if (request_id->device_id == local_entry->id.device_id &&
+                  request_id->counter == local_entry->id.counter) {
               
               have_found = true;
               bt_serial.write(OK);
-              bt_serial.write((uint8_t*)current_entry, sizeof(DataEntry));
+              bt_serial.write((uint8_t*)local_entry, sizeof(DataEntry));
             }
           }
 
@@ -471,6 +471,18 @@ void loop() {
           break;
         }
         case BLE_MESH_COMMAND_PUSH_DATA_ENTRY: {
+          if (mesh_command_data_size < sizeof(DataEntry)) {
+            if (!bt_serial.available()) break;
+
+            mesh_command_data[mesh_command_data_size++] = bt_serial.read();
+          }
+
+          const DataEntry *remote_entry = (const DataEntry*)mesh_command_data;
+
+          // TODO:
+          // Merge logic
+
+
           break;
         }
       }
