@@ -12,7 +12,7 @@
 #define AT_RESPONSE_DELAY 100
 #define AT_LONG_RESPONSE_DELAY 1000
 
-void sendClean(const char* command, bool blocking_delay = false);
+#define MESH_BUFFER_SIZE 10
 
 const uint16_t NODES_COUNT = 2;
 const String MESH_NODES[NODES_COUNT] = {"685E1C1A68CF", "685E1C1A5A30"};
@@ -55,12 +55,14 @@ typedef enum {
 // All commands return following format:
 // BleMeshCommandResult;<command-response>\n
 typedef enum {
+  BLE_MESH_COMMAND_UNKNOWN = -1,
+
   // Parameters: void
   // Returns: void
   BLE_MESH_COMMAND_OK = 0,
 
   // Parameters: void
-  // Returns array of DataId from mesh_node_data_buffer
+  // Returns: <number of entries>, <array of DataId from mesh_node_data_buffer>
   BLE_MESH_COMMAND_LIST_DATA_ENTRIES = 1,
 
   // Parameters: DataId
@@ -73,7 +75,7 @@ typedef enum {
 } BleMeshCommand;
 
 typedef struct {
-  DataId         id;
+  DataId id;
   FieldsStatuses fields_statuses;
   
   float32_t temperature;
@@ -110,13 +112,17 @@ typedef enum {
   BLE_STATE_MACHINE_INIT_ADVERTISMENT,
   BLE_STATE_MACHINE_START_ADVERTISMENT,
   BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION,
+  BLE_STATE_MACHINE_SLAVE_MESH_COMMAND_HANDLER,
 
   BLE_STATE_MACHINE_CONNECT_1,
 
   BLE_STATE_MACHINE_DEBUG,
 } BleStateMachine;
 
-static DataEntry mesh_node_data_buffer[3];
+void sendClean(const char* command, bool blocking_delay = false);
+void updateStateMachine(BleStateMachine new_procedure, bool clear_response = true);
+
+static DataEntry mesh_node_data_buffer[MESH_BUFFER_SIZE];
 DataEntry aggregation_data_entry;
 bool is_first_read = true;
 uint16_t device_id = 0; // Update to BLE module last 2 bytes of MAC
@@ -130,7 +136,12 @@ uint16_t ble_discovered_nodes_ids[NODES_COUNT] = {-1};
 
 uint16_t slave_duration = 0;
 uint16_t slave_start_time = 0;
+uint16_t slave_connection_time = 0;
 BleStateMachine before_send_at_procedure = BLE_STATE_MACHINE_IDLE;
+
+BleMeshCommand mesh_command = BLE_MESH_COMMAND_UNKNOWN;
+uint8_t mesh_command_data[sizeof(DataEntry)] = {-1};
+uint16_t mesh_command_data_size = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -166,8 +177,6 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_SEND_AT: {
-      if (getStateMachineMillis() < AT_LONG_RESPONSE_DELAY) break;
-
       Serial.println("Sending AT");
       sendClean("AT");
 
@@ -251,7 +260,7 @@ void loop() {
         ble_discovered_nodes_ids[j] = temp;
       }
 
-      Serial.print("Discovered nodes: ");
+      Serial.print("Disc nodes: ");
       Serial.println(discovered_count);
 
       updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
@@ -264,7 +273,8 @@ void loop() {
       // Check there was left one more device to connect to
       if (i >= NODES_COUNT) {
         Serial.println("Finish MASTER");
-        updateStateMachine(BLE_STATE_MACHINE_INIT_SLAVE);
+        startDebugProcedure();
+        // updateStateMachine(BLE_STATE_MACHINE_INIT_SLAVE);
         break;
       }
 
@@ -348,8 +358,8 @@ void loop() {
       Serial.print("SLAVE good: ");
       Serial.println(slave_duration);
       
-      sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
       slave_start_time = millis();
+      sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
       break;
     }
     case BLE_STATE_MACHINE_INIT_ADVERTISMENT: {
@@ -377,15 +387,94 @@ void loop() {
     case BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION: {
       // Check if slave phase has ended
       if (millis() - slave_start_time >= slave_duration) {
-        startDebugProcedure();
         // sendAtCommand(BLE_STATE_MACHINE_INIT_MASTER)
+        // break;
+      }
+
+      if (ble_response.length() != 7) {
+        // Read until obtain connection string
+        if (bt_serial.available()) ble_response += (char)bt_serial.read();
         break;
       }
 
+      if (ble_response != "OK+CONN") {
+        sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
+        break;
+      }
 
+      Serial.println("Connected");
+      
+      slave_connection_time = millis();
+      updateStateMachine(BLE_STATE_MACHINE_SLAVE_MESH_COMMAND_HANDLER);
+      break;
+    }
+    case BLE_STATE_MACHINE_SLAVE_MESH_COMMAND_HANDLER: {
+      if (millis() - slave_connection_time >= 5000) {
+        sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
+        break;
+      }
 
-      // startDebug();
-      // break;
+      if (mesh_command == BLE_MESH_COMMAND_UNKNOWN) {
+        if (!bt_serial.available()) break;
+
+        mesh_command = bt_serial.read();
+        // memset(mesh_command_data, 0, sizeof(mesh_command_data));
+        mesh_command_data_size = 0;
+      }
+
+      switch (mesh_command) {
+        case BLE_MESH_COMMAND_OK: {
+          bt_serial.write(OK);
+
+          mesh_command = BLE_MESH_COMMAND_UNKNOWN;
+          break;
+        }
+        case BLE_MESH_COMMAND_LIST_DATA_ENTRIES: {
+          uint16_t valid_entries = 0;
+          for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++)
+            if (mesh_node_data_buffer[i].id.device_id != 0) valid_entries++;
+
+          bt_serial.write(OK);
+          bt_serial.write(valid_entries);
+          for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++)
+            bt_serial.write((uint8_t*)&mesh_node_data_buffer[i].id, sizeof(DataId));
+
+          mesh_command = BLE_MESH_COMMAND_UNKNOWN;
+          break;
+        }
+        case BLE_MESH_COMMAND_GET_DATA_ENTRY: {
+          if (mesh_command_data_size < sizeof(DataId)) {
+            if (!bt_serial.available()) break;
+
+            mesh_command_data[mesh_command_data_size++] = bt_serial.read();
+          }
+
+          const DataId *request_id = (const DataId*)mesh_command_data;
+          bool have_found = false;
+
+          for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
+            const DataEntry *current_entry = &mesh_node_data_buffer[i];
+
+            if (request_id->device_id == current_entry->id.device_id &&
+                  request_id->counter == current_entry->id.counter) {
+              
+              have_found = true;
+              bt_serial.write(OK);
+              bt_serial.write((uint8_t*)current_entry, sizeof(DataEntry));
+            }
+          }
+
+          if (!have_found)
+            bt_serial.write(ERROR);
+            
+          mesh_command = BLE_MESH_COMMAND_UNKNOWN;
+          break;
+        }
+        case BLE_MESH_COMMAND_PUSH_DATA_ENTRY: {
+          break;
+        }
+      }
+
 
       break;
     }
@@ -409,8 +498,8 @@ void sendAtCommand(BleStateMachine callback_procedure) {
   updateStateMachine(BLE_STATE_MACHINE_SEND_AT);
 }
 
-void updateStateMachine(BleStateMachine new_procedure) {
-  ble_response = "";
+void updateStateMachine(BleStateMachine new_procedure, bool clear_response = true) {
+  if (clear_response) ble_response = "";
   ble_state_machine = new_procedure;
   ble_state_machine_time = millis();
 }
