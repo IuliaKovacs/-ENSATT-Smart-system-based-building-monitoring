@@ -16,8 +16,6 @@
 
 const uint16_t NODES_COUNT = 2;
 const String MESH_NODES[NODES_COUNT] = {"685E1C1A68CF", "685E1C1A5A30"};
-const uint16_t MAX_READINGS_PER_NODE = MESH_BUFFER_SIZE / NODES_COUNT;
-uint16_t CURRENT_NODE_IND = -1;
 
 typedef float float32_t;
 
@@ -49,8 +47,8 @@ typedef enum {
 } AlarmStatus;
 
 typedef enum {
-  OK = 'O',
-  ERROR = 'E',
+  OK = 0,
+  ERROR = 1,
   UNKNOWN = -1
 } BleMeshCommandResult;
 
@@ -61,19 +59,19 @@ typedef enum {
 
   // Parameters: void
   // Returns: void
-  BLE_MESH_COMMAND_OK = 'O',
+  BLE_MESH_COMMAND_OK = 0,
 
   // Parameters: void
   // Returns: <number of entries>, <array of DataId from mesh_node_data_buffer>
-  BLE_MESH_COMMAND_LIST_DATA_ENTRIES = 'L',
+  BLE_MESH_COMMAND_LIST_DATA_ENTRIES = 1,
 
   // Parameters: DataId
   // Returns: DataEntry
-  BLE_MESH_COMMAND_GET_DATA_ENTRY = 'G',
+  BLE_MESH_COMMAND_GET_DATA_ENTRY = 2,
 
   // Parameters: DataEntry
   // Returns: void
-  BLE_MESH_COMMAND_PUSH_DATA_ENTRY = 'P',
+  BLE_MESH_COMMAND_PUSH_DATA_ENTRY = 3,
 } BleMeshCommand;
 
 typedef struct {
@@ -155,24 +153,6 @@ void setup() {
   Serial.println("BLE Good");
   Serial.print("ID: ");
   Serial.println(device_id);
-
-  // Temporary
-  if ((device_id & 1) == 0) {
-    Serial.println("Add init record");
-    mesh_node_data_buffer[0] = DataEntry {
-      DataId {device_id, 11},
-      FieldsStatuses {-1},
-      0.11,
-      0.22,
-      525252,
-      646464,
-      101010,
-      101010,
-      777,
-      false,
-      ALARM_STATUS_ACTIVE
-    };
-  }
 }
 
 bool a = false;
@@ -253,7 +233,7 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (getStateMachineMillis() < 1000) break;
+      if (getStateMachineMillis() < 500) break;
 
       for (int i = 0; i < NODES_COUNT; i++) ble_discovered_nodes_ids[i] = -1;
 
@@ -321,7 +301,7 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (getStateMachineMillis() < 300) break;
+      if (getStateMachineMillis() < 100) break;
 
       // Detect F or E in case there were present
       delay(5);
@@ -373,7 +353,6 @@ void loop() {
         loadBleBytes();
         break;
       }
-      if (getStateMachineMillis() < 1000) break;
 
       slave_duration = 15000 + random(15000);
       Serial.print("SLAVE good: ");
@@ -384,8 +363,6 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_INIT_ADVERTISMENT: {
-      if (getStateMachineMillis() < 1000) break;
-
       Serial.println("Adv started");
       sendClean("AT+START");
 
@@ -432,21 +409,21 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_SLAVE_MESH_COMMAND_HANDLER: {
-      if (millis() - slave_connection_time >= 10000) {
-        // sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
-        // break;
+      if (millis() - slave_connection_time >= 5000) {
+        sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
+        break;
       }
 
       if (mesh_command == BLE_MESH_COMMAND_UNKNOWN) {
         if (!bt_serial.available()) break;
 
         mesh_command = bt_serial.read();
+        // memset(mesh_command_data, 0, sizeof(mesh_command_data));
         mesh_command_data_size = 0;
       }
 
       switch (mesh_command) {
         case BLE_MESH_COMMAND_OK: {
-          Serial.println("Mesh OK");
           bt_serial.write(OK);
 
           mesh_command = BLE_MESH_COMMAND_UNKNOWN;
@@ -461,8 +438,6 @@ void loop() {
           bt_serial.write(valid_entries);
           for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++)
             bt_serial.write((uint8_t*)&mesh_node_data_buffer[i].id, sizeof(DataId));
-          
-          Serial.println("Mesh LIST");
 
           mesh_command = BLE_MESH_COMMAND_UNKNOWN;
           break;
@@ -472,7 +447,6 @@ void loop() {
             if (!bt_serial.available()) break;
 
             mesh_command_data[mesh_command_data_size++] = bt_serial.read();
-            break;
           }
 
           const DataId *request_id = (const DataId*)mesh_command_data;
@@ -490,8 +464,6 @@ void loop() {
             }
           }
 
-          Serial.println("Mesh GET");
-
           if (!have_found)
             bt_serial.write(ERROR);
             
@@ -503,22 +475,16 @@ void loop() {
             if (!bt_serial.available()) break;
 
             mesh_command_data[mesh_command_data_size++] = bt_serial.read();
-            break;
           }
 
-          Serial.println("Mesh PUSH");
-
           const DataEntry *remote_entry = (const DataEntry*)mesh_command_data;
-          updateLocalMeshState(remote_entry);
+
+          // TODO:
+          // Merge logic
+
 
           break;
         }
-
-        default:
-          bt_serial.write(ERROR);
-          mesh_command = BLE_MESH_COMMAND_UNKNOWN;
-
-          break;
       }
 
 
@@ -533,69 +499,6 @@ void loop() {
     default:
       break;
   }  
-}
-
-void updateLocalMeshState(DataEntry *new_entry) {
-  uint16_t device_readings_distribution[NODES_COUNT] = {0};
-
-  for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
-    const DataEntry *current_data_entry = &mesh_node_data_buffer[i];
-
-    for (uint16_t node_ind = 0; node_ind < NODES_COUNT; node_ind++) {
-      uint16_t node_device_id = getDeviceId(MESH_NODES[node_ind].c_str());
-
-      if (current_data_entry->id.device_id == node_device_id)
-        device_readings_distribution[node_ind]++;
-    }
-  }
-
-  uint16_t new_entry_node_ind = -1;
-  for (uint16_t i = 0; i < NODES_COUNT; i++) {
-    if (getDeviceId(MESH_NODES[i].c_str()) == new_entry->id.device_id) {
-      new_entry_node_ind = i;
-      break;
-    }
-  }
-
-  // Overwrite oldest device type entry
-  if (device_readings_distribution[new_entry_node_ind] >= MAX_READINGS_PER_NODE) {
-    uint16_t oldest_entry_ind = -1;
-    uint16_t oldest_entry_counter = -1;
-
-    for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
-      const DataEntry *current_data_entry = &mesh_node_data_buffer[i];
-
-      if (current_data_entry->id.device_id != new_entry->id.device_id) continue;
-      if (current_data_entry->id.counter >= oldest_entry_counter) continue;
-
-      oldest_entry_ind = i;
-      oldest_entry_counter = current_data_entry->id.counter;  
-    }
-
-    if (mesh_node_data_buffer[oldest_entry_ind].counter < new_entry->id.counter)
-      mesh_node_data_buffer[oldest_entry_ind] = *new_entry;
-
-    return;
-  } 
-  
-  // Insert in empty slot
-  for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
-    const DataEntry *current_data_entry = &mesh_node_data_buffer[i];
-
-    if (current_data_entry->id.device_id == 0) {
-      mesh_node_data_buffer[i] = *new_entry;
-      break;
-    }
-  }
-}
-
-uint16_t getDeviceId(const char *mac_address) {
-  char* end_pointer;
-  uint16_t device_id = strtol(&mac_address[8], &end_pointer, 16);
-
-  if (end_pointer == mac_address[12]) return -1;  
-
-  return device_id;
 }
 
 uint16_t getStateMachineMillis() {
@@ -677,14 +580,7 @@ void initBleModule() {
     return 0;
   }
 
-  device_id = getDeviceId(&address_response[8]);
-  if (device_id == -1)
-    return panic_error = "Invalid ADDR";
-
-  // Init CURRENT_NODE_IND
-  for (uint16_t i = 0; i < NODES_COUNT; i++)
-    if (getDeviceId(MESH_NODES[i].c_str()) == device_id)
-      CURRENT_NODE_IND = i;
+  device_id = mac_result;
 
   char board_name[128];
   sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
