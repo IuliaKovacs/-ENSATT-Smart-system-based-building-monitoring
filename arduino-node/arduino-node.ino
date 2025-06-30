@@ -30,6 +30,23 @@ typedef struct {
   uint16_t timestamp;
 } DataId;
 
+
+#define GAS_WARNING_THRESHOLD 200     // ppm
+#define GAS_EMERGENCY_THRESHOLD 200   // ppm
+
+#define SOUND_WARNING_THRESHOLD 10     // dB (adjust as per your sound sensor)
+
+typedef enum {
+  SYSTEM_NORMAL,
+  SYSTEM_WARNING,
+  SYSTEM_EMERGENCY
+} SystemState;
+
+SystemState current_state = SYSTEM_NORMAL;
+
+bool emergency_flag = false;
+
+
 typedef struct {
   uint8_t has_temperature : 1;
   uint8_t has_humidity_level : 1;
@@ -245,11 +262,45 @@ void loop() {
 //   }
 
    Serial.println("Reading values from sensors");
-   delay(1000);
+  //  delay(1000);
    readSensorsData();
-   delay(1000);
+  //  delay(1000);
    printAggregatedData();
-  delay(1000);  
+  // delay(1000);  
+
+  switch (current_state) {
+    case SYSTEM_NORMAL:
+      if (isWarningCondition()) {
+        Serial.println("Switching to WARNING state.");
+        current_state = SYSTEM_WARNING;
+      }
+      break;
+
+    case SYSTEM_WARNING:
+      displayWarningLights();
+
+      if (isEmergencyCondition()) {
+        Serial.println("Switching to EMERGENCY state.");
+        emergency_flag = true;
+        current_state = SYSTEM_EMERGENCY;
+      } else if (!isWarningCondition()) {
+        Serial.println("Warning cleared — returning to NORMAL.");
+        current_state = SYSTEM_NORMAL;
+      }
+      break;
+
+    case SYSTEM_EMERGENCY:
+      activateEmergencyPlan();
+
+      if (isSafeToReturn()) {
+        Serial.println("Emergency resolved — returning to NORMAL.");
+        emergency_flag = false;
+        current_state = SYSTEM_NORMAL;
+      }
+      break;
+  }
+
+  delay(1000); // Limit loop frequency
 //   if (panic_error.length() > 0) {
 //     Serial.print("Detected global error (resetting): ");
 //     Serial.println(panic_error);
@@ -420,4 +471,29 @@ void printAggregatedData(){
   Serial.print("temperature: "); Serial.println(aggregation_data_entry.temperature);
   Serial.print("noise_level: "); Serial.println(aggregation_data_entry.noise_level);
   Serial.print("earthquake_detected: "); Serial.println(aggregation_data_entry.earthquake_detected);
+}
+
+bool isWarningCondition() {
+  return (aggregation_data_entry.eCO2_level > GAS_WARNING_THRESHOLD ||
+          aggregation_data_entry.noise_level > SOUND_WARNING_THRESHOLD);
+}
+
+bool isEmergencyCondition() {
+  return (aggregation_data_entry.flame_detected || emergency_flag);
+}
+
+bool isSafeToReturn() {
+  return (!aggregation_data_entry.flame_detected &&
+          !isWarningCondition());
+}
+
+void displayWarningLights() {
+  Serial.println("⚠️ Warning: Gas or sound levels high — blinking orange light.");
+  orangeSlowlyBlinkingLight();
+}
+
+void activateEmergencyPlan() {
+  Serial.println("🚨 Emergency: Fire or critical condition — activating red light and alarm.");
+  redBlinkingLight();
+  playAlarmSound();
 }
