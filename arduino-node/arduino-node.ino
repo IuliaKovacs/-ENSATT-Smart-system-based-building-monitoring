@@ -12,7 +12,9 @@
 #define AT_RESPONSE_DELAY 100
 #define AT_LONG_RESPONSE_DELAY 1000
 
-#define MESH_BUFFER_SIZE 10
+#define MESH_BUFFER_SIZE 8
+#define CONNECTION_TIMEOUT 10000
+#define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
 
 const uint16_t NODES_COUNT = 2;
 const String MESH_NODES[NODES_COUNT] = {"685E1C1A68CF", "685E1C1A5A30"};
@@ -106,7 +108,9 @@ typedef enum {
   BLE_STATE_MACHINE_MASTER_CONNECT,
   BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES,
   BLE_STATE_MACHINE_PUSH_REMOTE_MISSING,
+  BLE_STATE_MACHINE_PUSH_REMOTE_MISSING_RESPONSE,
   BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING,
+  BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING_RESPONSE,
 
   // Slave flow
   BLE_STATE_MACHINE_INIT_SLAVE,
@@ -137,13 +141,21 @@ String ble_response = "";
 uint16_t ble_discovered_nodes_ids[NODES_COUNT] = {-1};
 
 uint16_t slave_duration = 0;
-uint16_t slave_start_time = 0;
-uint16_t slave_connection_time = 0;
+uint16_t connection_start_time = 0;
 BleStateMachine before_send_at_procedure = BLE_STATE_MACHINE_IDLE;
 
 BleMeshCommand mesh_command = BLE_MESH_COMMAND_UNKNOWN;
-uint8_t mesh_command_data[sizeof(DataEntry)] = {-1};
+// Big enough to hold whole mesh list command response
+// shoube be bigger then sizeof(DataEntry)
+uint8_t mesh_command_data[MESH_COMMAND_DATA_SIZE] = {-1};
+const DataId *mesh_list_response = mesh_command_data[3];
 uint16_t mesh_command_data_size = 0;
+uint16_t mesh_master_list_response_length = 0;
+uint16_t mesh_master_counter = 0;
+
+uint8_t valid_remote_response = 0;
+uint8_t remote_downloaded_entry[sizeof(DataEntry)] = {0};
+
 
 void setup() {
   Serial.begin(9600);
@@ -152,13 +164,12 @@ void setup() {
 
   initBleModule();
 
-  Serial.println("BLE Good");
+  Serial.println("BLE OK");
   Serial.print("ID: ");
   Serial.println(device_id);
 
   // Temporary
   if ((device_id & 1) == 0) {
-    Serial.println("Add init record");
     mesh_node_data_buffer[0] = DataEntry {
       DataId {device_id, 11},
       FieldsStatuses {-1},
@@ -172,6 +183,34 @@ void setup() {
       false,
       ALARM_STATUS_ACTIVE
     };
+  } else {
+    mesh_node_data_buffer[0] = DataEntry {
+      DataId {device_id, 777},
+      FieldsStatuses {-1},
+      0.33,
+      0.11,
+      123123,
+      11111,
+      123123,
+      333,
+      11,
+      true,
+      ALARM_STATUS_ACTIVE
+    };
+
+    mesh_node_data_buffer[1] = DataEntry {
+      DataId {device_id, 888},
+      FieldsStatuses {-1},
+      0.33,
+      0.11,
+      123123,
+      11111,
+      123123,
+      333,
+      11,
+      true,
+      ALARM_STATUS_ACTIVE
+    };
   }
 }
 
@@ -182,7 +221,7 @@ void loop() {
   // Serial.println(panic_error);
   // delay(100);
   if (panic_error.length() > 0) {
-    Serial.print("Detected global error (resetting): ");
+    Serial.print("G ERR: ");
     Serial.println(panic_error);
     Serial.println();
     Serial.flush();
@@ -197,7 +236,9 @@ void loop() {
       break;
     }
     case BLE_STATE_MACHINE_SEND_AT: {
-      Serial.println("Sending AT");
+      if (getStateMachineMillis() < 1000) break;
+
+      Serial.println("S AT");
       sendClean("AT");
 
       updateStateMachine(BLE_STATE_MACHINE_WAIT_AT_RESPONSE);
@@ -214,12 +255,12 @@ void loop() {
         break;
       }
 
-      Serial.println("Received AT");
+      Serial.println("R AT");
       updateStateMachine(before_send_at_procedure);
       break;
     }
     case BLE_STATE_MACHINE_INIT_MASTER: {
-      Serial.println("Starting MASTER");
+      Serial.println("S MASTER");
       sendClean("AT+ROLE1");
 
       updateStateMachine(BLE_STATE_MACHINE_START_MASTER);
@@ -237,7 +278,7 @@ void loop() {
       }
       if (getStateMachineMillis() < 1000) break;
 
-      Serial.println("MASTER Good");
+      Serial.println("MASTER OK");
       sendClean("AT+DISC?");
 
       updateStateMachine(BLE_STATE_MACHINE_DISCOVERY_STATE);
@@ -280,28 +321,30 @@ void loop() {
         ble_discovered_nodes_ids[j] = temp;
       }
 
-      Serial.print("Disc nodes: ");
+      Serial.print("Disc: ");
       Serial.println(discovered_count);
 
       updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
       break; 
     }
     case BLE_STATE_MACHINE_MASTER_INIT_CONNECT: {
-      uint16_t i = 0;
-      while (i < NODES_COUNT && ble_discovered_nodes_ids[i] == -1) i++;
+      if (getStateMachineMillis() < 1000) break;
+
+      uint16_t new_node_ind = 0;
+      while (new_node_ind < NODES_COUNT && ble_discovered_nodes_ids[new_node_ind] == -1) new_node_ind++;
 
       // Check there was left one more device to connect to
-      if (i >= NODES_COUNT) {
-        Serial.println("Finish MASTER");
-        startDebugProcedure();
-        // updateStateMachine(BLE_STATE_MACHINE_INIT_SLAVE);
+      if (new_node_ind >= NODES_COUNT) {
+        Serial.println("F MASTER");
+        // startDebugProcedure();
+        updateStateMachine(BLE_STATE_MACHINE_INIT_SLAVE);
         break;
       }
 
-      const String *device_mac = &MESH_NODES[ble_discovered_nodes_ids[i]];
-      ble_discovered_nodes_ids[i] = -1;
+      const String *device_mac = &MESH_NODES[ble_discovered_nodes_ids[new_node_ind]];
+      ble_discovered_nodes_ids[new_node_ind] = -1;
 
-      Serial.print("Connecting to: ");
+      Serial.print("M CON: ");
       Serial.println(*device_mac);
 
       String connection_command = "AT+CON";
@@ -329,35 +372,174 @@ void loop() {
 
       // In case connection failed, ignore and move on to next node
       if (ble_response != "OK+CONNAOK+CONN") {
-        Serial.println("Failed connect");
-        updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        Serial.println("F CON");
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
         break;
       }
 
-      Serial.println("Connected");
+      Serial.println("CON");
+      connection_start_time = millis();
+
+      bt_serial.write(BLE_MESH_COMMAND_LIST_DATA_ENTRIES);
+      mesh_command_data_size = 0;
+      mesh_master_list_response_length = -1;
+
       updateStateMachine(BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES);
       break;
     }
     case BLE_STATE_MACHINE_QUERY_REMOTE_ENTRIES: {
+      if (millis() - connection_start_time > CONNECTION_TIMEOUT) {
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
+
+      if (mesh_command_data_size < 3) {
+        loadMeshData(); 
+        break;
+      }
+      if (mesh_command_data[0] != OK) {
+        Serial.println("BAD Me");
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
+
+      if (mesh_master_list_response_length == -1) {
+        mesh_master_list_response_length = *(uint16_t*)&mesh_command_data[1];
+        Serial.println(mesh_master_list_response_length);
+      }
+
+      if (mesh_command_data_size < mesh_master_list_response_length * sizeof(DataId) + 3) {
+        loadMeshData();
+        break;
+      }
+
+      Serial.print("R S: ");
+      Serial.println(mesh_master_list_response_length);
+
+      mesh_master_counter = 0;
+
       updateStateMachine(BLE_STATE_MACHINE_PUSH_REMOTE_MISSING);
       break;
     }      
     case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING: {
-      startDebugProcedure();
-      break;
+      if (millis() - connection_start_time > CONNECTION_TIMEOUT) {
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
 
-      updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
+      if (mesh_master_counter >= MESH_BUFFER_SIZE) {
+        mesh_master_counter = 0;
+        updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
+        break;
+      }
+
+      const DataEntry *local_entry = &mesh_node_data_buffer[mesh_master_counter++];
+      for (uint16_t i = 0; i < mesh_master_list_response_length; i++) {
+        // Detected missing entry
+        if (mesh_list_response[i].device_id != local_entry->id.device_id &&
+              mesh_list_response[i].counter != local_entry->id.counter) {
+
+          Serial.print("P: ");
+          Serial.print(local_entry->id.device_id);
+          Serial.print(":");
+          Serial.println(local_entry->id.counter);
+
+          bt_serial.write(BLE_MESH_COMMAND_PUSH_DATA_ENTRY);
+          bt_serial.write((uint8_t*)local_entry, sizeof(DataEntry));
+
+          updateStateMachine(BLE_STATE_MACHINE_PUSH_REMOTE_MISSING_RESPONSE);
+          break;
+        }
+      }
+      break;
+    }
+    case BLE_STATE_MACHINE_PUSH_REMOTE_MISSING_RESPONSE: {
+      if (millis() - connection_start_time > CONNECTION_TIMEOUT) {
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
+
+      if (!bt_serial.available()) break;
+
+      if (bt_serial.read() == OK) Serial.println("P OK");
+      else Serial.println("P E");
+
+      updateStateMachine(BLE_STATE_MACHINE_PUSH_REMOTE_MISSING);
       break;
     }
     case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING: {
-      updateStateMachine(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+      if (millis() - connection_start_time > CONNECTION_TIMEOUT) {
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
+
+      if (mesh_master_counter >= mesh_master_list_response_length) {
+        mesh_master_counter = 0;
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
+
+      const DataId *remote_id = &mesh_list_response[mesh_master_counter++];
+      for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
+        const DataEntry *local_entry = &mesh_node_data_buffer[i];
+        // Detected missing entry
+        if (local_entry->id.device_id != remote_id->device_id &&
+              local_entry->id.counter != remote_id->counter) {
+
+          Serial.print("G: ");
+          Serial.print(remote_id->device_id);
+          Serial.print(":");
+          Serial.println(remote_id->counter);
+
+          bt_serial.write(BLE_MESH_COMMAND_GET_DATA_ENTRY);
+          bt_serial.write((uint8_t*)remote_id, sizeof(DataId));
+
+          mesh_command_data_size = 0;
+          valid_remote_response = -1;
+          updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING_RESPONSE);
+          break;
+        }
+      }
+
+      sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+      break;
+    }
+    case BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING_RESPONSE: {
+      if (millis() - connection_start_time > CONNECTION_TIMEOUT) {
+        sendAtCommand(BLE_STATE_MACHINE_MASTER_INIT_CONNECT);
+        break;
+      }
+
+      if (valid_remote_response == -1) {
+        if (!bt_serial.available()) break;
+
+        valid_remote_response = bt_serial.read();
+
+        if (valid_remote_response != OK) {
+          Serial.println("D E");
+          updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
+          break;
+        }
+      }
+
+      if (mesh_command_data_size < sizeof(DataEntry)) {
+        while (bt_serial.available() && mesh_command_data_size < sizeof(DataEntry))
+          remote_downloaded_entry[mesh_command_data_size++] = bt_serial.read();
+        break;
+      }
+
+      updateLocalMeshState((DataEntry*)remote_downloaded_entry);
+      Serial.print("D L: ");
+      Serial.println(((DataEntry*)remote_downloaded_entry)->id.counter);
+
+      updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
       break;
     }
 
     // SLAVE LOGIC
 
     case BLE_STATE_MACHINE_INIT_SLAVE: {
-      Serial.println("Starting SLAVE");
+      Serial.println("S SLAVE");
       sendClean("AT+ROLE0");
 
       updateStateMachine(BLE_STATE_MACHINE_START_SLAVE);
@@ -376,17 +558,17 @@ void loop() {
       if (getStateMachineMillis() < 1000) break;
 
       slave_duration = 15000 + random(15000);
-      Serial.print("SLAVE good: ");
+      Serial.print("SLAVE OK: ");
       Serial.println(slave_duration);
       
-      slave_start_time = millis();
+      connection_start_time = millis();
       sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
       break;
     }
     case BLE_STATE_MACHINE_INIT_ADVERTISMENT: {
       if (getStateMachineMillis() < 1000) break;
 
-      Serial.println("Adv started");
+      Serial.println("Adv S");
       sendClean("AT+START");
 
       updateStateMachine(BLE_STATE_MACHINE_START_ADVERTISMENT);
@@ -403,15 +585,15 @@ void loop() {
         break;
       }
 
-      Serial.println("Adv Good");
+      Serial.println("Adv OK");
       updateStateMachine(BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION);
       break;
     }
     case BLE_STATE_MACHINE_SLAVE_WAIT_CONNECTION: {
       // Check if slave phase has ended
-      if (millis() - slave_start_time >= slave_duration) {
-        // sendAtCommand(BLE_STATE_MACHINE_INIT_MASTER)
-        // break;
+      if (millis() - connection_start_time >= slave_duration) {
+        sendAtCommand(BLE_STATE_MACHINE_INIT_MASTER)
+        break;
       }
 
       if (ble_response.length() != 7) {
@@ -425,16 +607,16 @@ void loop() {
         break;
       }
 
-      Serial.println("Connected");
-      
-      slave_connection_time = millis();
+      Serial.println("S CON");
+      connection_start_time = millis();
+
       updateStateMachine(BLE_STATE_MACHINE_SLAVE_MESH_COMMAND_HANDLER);
       break;
     }
     case BLE_STATE_MACHINE_SLAVE_MESH_COMMAND_HANDLER: {
-      if (millis() - slave_connection_time >= 10000) {
-        // sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
-        // break;
+      if (millis() - connection_start_time >= CONNECTION_TIMEOUT) {
+        sendAtCommand(BLE_STATE_MACHINE_INIT_ADVERTISMENT);
+        break;
       }
 
       if (mesh_command == BLE_MESH_COMMAND_UNKNOWN) {
@@ -458,20 +640,19 @@ void loop() {
             if (mesh_node_data_buffer[i].id.device_id != 0) valid_entries++;
 
           bt_serial.write(OK);
-          bt_serial.write(valid_entries);
+          bt_serial.write((uint8_t*)&valid_entries, 2);
           for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++)
-            bt_serial.write((uint8_t*)&mesh_node_data_buffer[i].id, sizeof(DataId));
+            if (mesh_node_data_buffer[i].id.device_id != 0) bt_serial.write((uint8_t*)&mesh_node_data_buffer[i].id, sizeof(DataId));
           
-          Serial.println("Mesh LIST");
+          Serial.print("L: ");
+          Serial.println(valid_entries);
 
           mesh_command = BLE_MESH_COMMAND_UNKNOWN;
           break;
         }
         case BLE_MESH_COMMAND_GET_DATA_ENTRY: {
           if (mesh_command_data_size < sizeof(DataId)) {
-            if (!bt_serial.available()) break;
-
-            mesh_command_data[mesh_command_data_size++] = bt_serial.read();
+            loadMeshData();
             break;
           }
 
@@ -490,7 +671,7 @@ void loop() {
             }
           }
 
-          Serial.println("Mesh GET");
+          Serial.println("Mesh G");
 
           if (!have_found)
             bt_serial.write(ERROR);
@@ -500,27 +681,28 @@ void loop() {
         }
         case BLE_MESH_COMMAND_PUSH_DATA_ENTRY: {
           if (mesh_command_data_size < sizeof(DataEntry)) {
-            if (!bt_serial.available()) break;
-
-            mesh_command_data[mesh_command_data_size++] = bt_serial.read();
+            loadMeshData();
             break;
           }
 
-          Serial.println("Mesh PUSH");
+          Serial.println("Mesh P");
 
           const DataEntry *remote_entry = (const DataEntry*)mesh_command_data;
           updateLocalMeshState(remote_entry);
+
+          bt_serial.write(OK);
+          mesh_command = BLE_MESH_COMMAND_UNKNOWN;
 
           break;
         }
 
         default:
+
           bt_serial.write(ERROR);
           mesh_command = BLE_MESH_COMMAND_UNKNOWN;
 
           break;
       }
-
 
       break;
     }
@@ -533,6 +715,11 @@ void loop() {
     default:
       break;
   }  
+}
+
+void loadMeshData() {
+  while (bt_serial.available() && mesh_command_data_size < MESH_COMMAND_DATA_SIZE)
+    mesh_command_data[mesh_command_data_size++] = bt_serial.read();
 }
 
 void updateLocalMeshState(DataEntry *new_entry) {
@@ -618,7 +805,7 @@ void loadBleBytes() {
 }
 
 void startDebugProcedure() {
-  Serial.println("#DEBUG#");
+  Serial.println("#D#");
   updateStateMachine(BLE_STATE_MACHINE_DEBUG);
 }
 
@@ -673,7 +860,7 @@ void initBleModule() {
   long mac_result = strtol(&address_response[15], &end_pointer, 16);
 
   if (end_pointer == address_response[20]) {
-    Serial.println("Failed ADDR parse");
+    Serial.println("ADDR E");
     return 0;
   }
 
