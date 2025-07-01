@@ -172,6 +172,7 @@ void setup() {
   initVibrationSensor();
   initLightSensor();
   initAirQuality();
+  initFlameSensor();
 }
 
 void loop() {
@@ -738,6 +739,7 @@ void aggregateSensorsReadings() {
   readVibrationSensor(&aggregation_data_entry.vibration_level, need_average);
   readLightSensor(&aggregation_data_entry.brightness_level, need_average);
   readCo2Sensor(&aggregation_data_entry.co2_level, need_average);
+  readFlameSensor(&aggregation_data_entry.flame_detected);
 
   // Serial.print("Co2 level:");
   // Serial.println(aggregation_data_entry.co2_level);
