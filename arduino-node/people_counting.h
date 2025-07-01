@@ -14,8 +14,6 @@
 #define DISTANCE_THRESHOLD 10
 
 #define IR_CAMERA_ADDR 0x33
-#define ERROR -1
-
 #define HUMAN_DETECTION_THRESHOLD -110.0
 
 // Defining states for the finite state machine
@@ -30,6 +28,7 @@ enum State {
 void initInfraredCamera();
 void initUltrasonicSensors();
 void counterSysSTM();
+void readMatrix();
 
 
 #endif

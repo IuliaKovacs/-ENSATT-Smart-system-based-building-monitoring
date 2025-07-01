@@ -7,6 +7,7 @@
 #include "light_sensor.h"
 #include "gas_sensor.h"
 #include "sound_sensor.h"
+#include "people_counting.h"
 #include <avr/wdt.h>
 
 // Increase RX buffer size to fit all responses without overwrite
@@ -79,13 +80,10 @@ typedef struct {
 
   uint16_t vibration_level;
 
-  // uint16_t tvoc_level;
   uint16_t co2_level;
-  // uint16_t h2_level;
-  // uint16_t ethanol_level;
-
   uint16_t noise_level;
   uint16_t brightness_level;
+
   uint16_t counter;
   bool flame_detected;
   AlarmStatus alarm_state;
@@ -175,6 +173,9 @@ void setup() {
   initAirQuality();
   initFlameSensor();
   initSoundSensor();
+
+  initInfraredCamera();
+  initUltrasonicSensors();
 }
 
 void loop() {
@@ -743,9 +744,10 @@ void aggregateSensorsReadings() {
   readCo2Sensor(&aggregation_data_entry.co2_level, need_average);
   readFlameSensor(&aggregation_data_entry.flame_detected);
   readSoundSensor(&aggregation_data_entry.noise_level, need_average);
+  counterSysSTM();
 
-  Serial.print("Sound:");
-  Serial.println(aggregation_data_entry.noise_level);
+  // Serial.print("Sound:");
+  // Serial.println(aggregation_data_entry.noise_level);
 
   need_average = true;
 }
