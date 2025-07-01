@@ -4,19 +4,22 @@
 #include "flame_sensor.h"
 #include "vibration_sensor.h"
 #include "LED_array.h"
+#include "light_sensor.h"
+#include "gas_sensor.h"
 #include <avr/wdt.h>
 
 // Increase RX buffer size to fit all responses without overwrite
-#define _SS_MAX_RX_BUFF 256
+// #define _SS_MAX_RX_BUFF 128
 #include <SoftwareSerial.h>
 
 #define AT_RESPONSE_DELAY 100
 #define AT_LONG_RESPONSE_DELAY 1300
 
-#define MESH_BUFFER_SIZE 6
+#define MESH_BUFFER_SIZE 2
 #define CONNECTION_TIMEOUT 5000
 #define READINGS_INTERVAL 10000
-#define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
+// #define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
+#define MESH_COMMAND_DATA_SIZE sizeof(DataEntry)
 
 const uint16_t NODES_COUNT = 2;
 const String MESH_NODES[NODES_COUNT] = {"685E1C1A68CF", "685E1C1A5A30"};
@@ -32,20 +35,6 @@ typedef struct {
   uint16_t device_id;
   uint16_t counter;
 } DataId;
-
-typedef struct {
-  uint8_t has_temperature : 1;
-  uint8_t has_humidity_level : 1;
-  uint8_t has_noise_level : 1;
-  uint8_t has_vibration_level : 1;
-  uint8_t has_brightness_level : 1;
-  uint8_t has_co2_level : 1;
-  uint8_t has_counter : 1;
-  uint8_t has_flame_status : 1;
-  uint8_t has_alarm_state : 1;
-
-  uint16_t reserved : 8;
-} FieldsStatuses;
 
 typedef enum {
   ALARM_STATUS_UNDEFINED = 0,
@@ -83,14 +72,19 @@ typedef enum {
 
 typedef struct {
   DataId id;
-  FieldsStatuses fields_statuses;
   
   float32_t temperature;
   float32_t humidity_level;
+
   uint16_t vibration_level;
+
+  // uint16_t tvoc_level;
+  uint16_t co2_level;
+  // uint16_t h2_level;
+  // uint16_t ethanol_level;
+
   uint16_t noise_level;
   uint16_t brightness_level;
-  uint16_t co2_level;
   uint16_t counter;
   bool flame_detected;
   AlarmStatus alarm_state;
@@ -170,11 +164,14 @@ void setup() {
 
   initBleModule();
 
-  Serial.println("BLE OK");
+  Serial.println("BLE O");
   Serial.print("ID: ");
   Serial.println(device_id);
 
   initHumidityTemperatureSensor();
+  initVibrationSensor();
+  initLightSensor();
+  initAirQuality();
 }
 
 void loop() {
@@ -739,9 +736,11 @@ void aggregateSensorsReadings() {
   readHumiditySensor(&aggregation_data_entry.humidity_level, need_average);
   readTemperatureSensor(&aggregation_data_entry.temperature, need_average);
   readVibrationSensor(&aggregation_data_entry.vibration_level, need_average);
+  readLightSensor(&aggregation_data_entry.brightness_level, need_average);
+  readCo2Sensor(&aggregation_data_entry.co2_level, need_average);
 
-  Serial.print("Vibration level:");
-  Serial.println(aggregation_data_entry.vibration_level);
+  // Serial.print("Co2 level:");
+  // Serial.println(aggregation_data_entry.co2_level);
 
   need_average = true;
 }
@@ -856,32 +855,32 @@ void processSerialBle() {
 void initBleModule() {
   sendClean("AT", true);
   if (readBtResponse() != "OK")
-    return panic_error = "Failed AT";
+    return panic_error = "AT F";
 
   sendClean("AT+RENEW", true);
   if (readBtResponse() != "OK+RENEW")
-    return panic_error = "Failed RENEW";
+    return panic_error = "REN F";
 
   sendClean("AT+IMME1", true);
   if (readBtResponse() != "OK+Set:1")
-    return panic_error = "Failed IMME";
+    return panic_error = "IMME F";
 
   sendClean("AT+CLEAR", true);
   if (readBtResponse() != "OK+CLEAR")
-    return panic_error = "Failed CLEAR";
+    return panic_error = "CLER F";
 
   sendClean("AT+ROLE1", true);
   if (readBtResponse() != "OK+Set:1")
-    return panic_error = "Failed ROLE";
+    return panic_error = "ROLE F";
 
   sendClean("AT+SHOW0", true);
   if (readBtResponse() != "OK+Set:0")
-    return panic_error = "Failed SHOW";
+    return panic_error = "SHOW F";
 
   sendClean("AT+ADDR?", true);
   String address_response = readBtResponse();
   if (!address_response.startsWith("OK+ADDR:")) {
-    panic_error = String("Failed ADDR");
+    panic_error = "ADDR E";
     return;
   }
     
@@ -895,7 +894,7 @@ void initBleModule() {
 
   device_id = getDeviceId(&address_response[8]);
   if (device_id == -1 || device_id == 0)
-    return panic_error = "Invalid ADDR";
+    return panic_error = "ADDR E";
 
   // Init CURRENT_NODE_IND
   for (uint16_t i = 0; i < NODES_COUNT; i++)
@@ -903,10 +902,10 @@ void initBleModule() {
       CURRENT_NODE_IND = i;
 
   char board_name[128];
-  sprintf(board_name, "AT+NAMET3-Node-%d", device_id);
+  sprintf(board_name, "Node-%d", device_id);
   sendClean(board_name, true);
   if (!readBtResponse().startsWith("OK+Set:"))
-    return panic_error = "Failed name";
+    return panic_error = "NAME F";
   
   delay(300);
 }

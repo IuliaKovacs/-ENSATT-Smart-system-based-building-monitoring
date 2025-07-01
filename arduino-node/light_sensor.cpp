@@ -1,12 +1,12 @@
 #include "light_sensor.h"
-#include <Arduino.h>
-
-const int light_sensor_pin = A3;
 
 void initLightSensor() {
-  pinMode(light_sensor_pin, INPUT);
+  pinMode(LIGHT_SENSOR_PIN, INPUT);
+
+  Serial.println("LIGHT INIT");
 }
 
-void readLightLevel(int *light_level) {
-  *light_level = analogRead(light_sensor_pin);
+void readLightSensor(uint16_t *result, bool average) {
+  *result = analogRead(LIGHT_SENSOR_PIN);
+  if (average) *result /= 2;
 }

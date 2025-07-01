@@ -2,9 +2,10 @@
 #define AIR_QUALITY_H
 
 #include <Arduino.h>
+#include "Adafruit_SGP30.h"
+#include <math.h>
 
 void initAirQuality();
-void readAirQuality(float *eCO2_aux, float *TVOC_aux);
-uint32_t getAbsoluteHumidity(float temperature, float humidity);
+void readCo2Sensor(uint16_t *co2_level, bool average);
 
 #endif
