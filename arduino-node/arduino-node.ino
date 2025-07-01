@@ -226,7 +226,7 @@ void loop() {
     case BLE_STATE_MACHINE_START_MASTER: {
       if (ble_response != "OK+Set:1") {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          Serial.print("MASTER S E");
+          Serial.println("MASTER S E");
           updateStateMachine(BLE_STATE_MACHINE_IDLE);
           break;
         }     
@@ -246,7 +246,7 @@ void loop() {
       if (!ble_response.endsWith("OK+DISCE")) {
         if (getStateMachineMillis() > 15000) {
           // panic_error = "Failed discovery";
-          Serial.print("DISC T");
+          Serial.println("DISC T");
           updateStateMachine(BLE_STATE_MACHINE_IDLE);
           break;
         }     
@@ -532,7 +532,7 @@ void loop() {
     case BLE_STATE_MACHINE_START_SLAVE: {
       if (ble_response != "OK+Set:0") {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          Serial.print("SLAVE S E");
+          Serial.println("SLAVE S E");
           updateStateMachine(BLE_STATE_MACHINE_IDLE);
           break;
         }     
