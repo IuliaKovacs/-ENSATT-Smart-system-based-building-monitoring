@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 void initHumidityTemperatureSensor();
-bool readHumiditySensor(float *result, bool average = false);
-bool readTemperatureSensor(float *result, bool average = false);
+bool readHumiditySensor(float *result, bool average);
+bool readTemperatureSensor(float *result, bool average);
 
 #endif

@@ -2,17 +2,13 @@
 
 void initVibrationSensor(){
     pinMode(VIBRATION_SENSOR_PIN, INPUT);
+
+    Serial.println("VIBR INIT");
 }
 
 
-void readVibrationSensor(bool *earthquakeDetected){
+void readVibrationSensor(int *result, bool average) {
+    *result = analogRead(VIBRATION_SENSOR_PIN);
 
-    int vibration = digitalRead(VIBRATION_SENSOR_PIN);
-
-    if (vibration == LOW) {   
-        Serial.println("!!! - Earthquake Detected! - !!!"); 
-        *earthquakeDetected = true;      
-    } else {
-        *earthquakeDetected = false;
-    }
+    if (average) *result /= 2;
 }

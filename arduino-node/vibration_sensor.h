@@ -1,12 +1,11 @@
 #ifndef VIBRATION_SENSOR_H
 #define VIBRATION_SENSOR_H
 
-#define VIBRATION_SENSOR_PIN  5      
-
-
 #include <Arduino.h>
 
+#define VIBRATION_SENSOR_PIN A0
+
 void initVibrationSensor();
-void readVibrationSensor(bool *earthquakeDetected);
+void readVibrationSensor(int *result, bool average);
 
 #endif

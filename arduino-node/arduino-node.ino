@@ -2,6 +2,7 @@
 #include "buzzer_sensor.h"
 #include "humidity_sensor.h"
 #include "flame_sensor.h"
+#include "vibration_sensor.h"
 #include "LED_array.h"
 #include <avr/wdt.h>
 
@@ -86,8 +87,8 @@ typedef struct {
   
   float32_t temperature;
   float32_t humidity_level;
-  uint16_t noise_level;
   uint16_t vibration_level;
+  uint16_t noise_level;
   uint16_t brightness_level;
   uint16_t co2_level;
   uint16_t counter;
@@ -737,13 +738,12 @@ void loop() {
 void aggregateSensorsReadings() {
   readHumiditySensor(&aggregation_data_entry.humidity_level, need_average);
   readTemperatureSensor(&aggregation_data_entry.temperature, need_average);
+  readVibrationSensor(&aggregation_data_entry.vibration_level, need_average);
 
-  // Serial.print("Humidity/temp average:");
-  // Serial.print(aggregation_data_entry.humidity_level);
-  // Serial.print(" ");
-  // Serial.println(aggregation_data_entry.temperature);
+  Serial.print("Vibration level:");
+  Serial.println(aggregation_data_entry.vibration_level);
 
-  // need_average = true;
+  need_average = true;
 }
 
 void loadMeshData() {
