@@ -11,20 +11,20 @@
 #include <avr/wdt.h>
 
 // Increase RX buffer size to fit all responses without overwrite
-// #define _SS_MAX_RX_BUFF 128
+#define _SS_MAX_RX_BUFF 128
 #include <SoftwareSerial.h>
 
 #define AT_RESPONSE_DELAY 100
 #define AT_LONG_RESPONSE_DELAY 1300
 
-#define MESH_BUFFER_SIZE 2
+#define MESH_BUFFER_SIZE 12
 #define CONNECTION_TIMEOUT 5000
-#define READINGS_INTERVAL 10000
-// #define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
-#define MESH_COMMAND_DATA_SIZE sizeof(DataEntry)
+#define READINGS_INTERVAL 15000
+#define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
+// #define MESH_COMMAND_DATA_SIZE sizeof(DataEntry)
 
-const uint16_t NODES_COUNT = 2;
-const String MESH_NODES[NODES_COUNT] = {"685E1C1A68CF", "685E1C1A5A30"};
+const uint16_t NODES_COUNT = 3;
+const char MESH_NODES[NODES_COUNT][13] = {"685E1C1A68CF", "685E1C1A5A6F", "685E1C1A5A30"};
 const uint16_t MAX_READINGS_PER_NODE = MESH_BUFFER_SIZE / NODES_COUNT;
 uint16_t CURRENT_NODE_IND = -1;
 uint16_t readings_counter = 0;
@@ -80,9 +80,9 @@ typedef struct {
 
   uint16_t vibration_level;
 
-  uint16_t co2_level;
-  uint16_t noise_level;
-  uint16_t brightness_level;
+  // uint16_t co2_level;
+  // uint16_t noise_level;
+  // uint16_t brightness_level;
 
   uint16_t counter;
   bool flame_detected;
@@ -192,7 +192,7 @@ void loop() {
   switch (ble_state_machine) {
     case BLE_STATE_MACHINE_IDLE: {
       if (getStateMachineMillis() < 1000) break;
-      
+      // startDebugProcedure();
       sendAtCommand(device_id & 1 ? BLE_STATE_MACHINE_INIT_MASTER : BLE_STATE_MACHINE_INIT_SLAVE);
       // sendAtCommand(BLE_STATE_MACHINE_INIT_MASTER);
       break;
@@ -266,9 +266,9 @@ void loop() {
 
       uint16_t discovered_count = 0;
       for (uint16_t i = 0; i < NODES_COUNT; i++) {
-        const String *current_node = &MESH_NODES[i];
+        const char* current_node = MESH_NODES[i];
 
-        if (ble_response.indexOf(*current_node) == -1) continue;
+        if (ble_response.indexOf(current_node) == -1) continue;
 
         uint16_t j = 0;
         while (ble_discovered_nodes_ids[j] != -1) j++;
@@ -306,14 +306,14 @@ void loop() {
         break;
       }
 
-      const String *device_mac = &MESH_NODES[ble_discovered_nodes_ids[new_node_ind]];
+      const char* device_mac = MESH_NODES[ble_discovered_nodes_ids[new_node_ind]];
       ble_discovered_nodes_ids[new_node_ind] = -1;
 
       Serial.print("CON M: ");
-      Serial.println(*device_mac);
+      Serial.println(device_mac);
 
       String connection_command = "AT+CON";
-      connection_command += *device_mac;
+      connection_command += device_mac;
       sendClean(connection_command.c_str());
 
       updateStateMachine(BLE_STATE_MACHINE_MASTER_CONNECT);
@@ -746,9 +746,6 @@ void aggregateSensorsReadings() {
   readSoundSensor(&aggregation_data_entry.noise_level, need_average);
   counterSysSTM();
 
-  // Serial.print("Sound:");
-  // Serial.println(aggregation_data_entry.noise_level);
-
   need_average = true;
 }
 
@@ -764,7 +761,7 @@ void updateLocalMeshState(DataEntry *new_entry) {
     const DataEntry *current_data_entry = &mesh_node_data_buffer[i];
 
     for (uint16_t node_ind = 0; node_ind < NODES_COUNT; node_ind++) {
-      uint16_t node_device_id = getDeviceId(MESH_NODES[node_ind].c_str());
+      uint16_t node_device_id = getDeviceId(MESH_NODES[node_ind]);
 
       if (current_data_entry->id.device_id == node_device_id)
         device_readings_distribution[node_ind]++;
@@ -773,7 +770,7 @@ void updateLocalMeshState(DataEntry *new_entry) {
 
   uint16_t new_entry_node_ind = -1;
   for (uint16_t i = 0; i < NODES_COUNT; i++) {
-    if (getDeviceId(MESH_NODES[i].c_str()) == new_entry->id.device_id) {
+    if (getDeviceId(MESH_NODES[i]) == new_entry->id.device_id) {
       new_entry_node_ind = i;
       break;
     }
@@ -905,7 +902,7 @@ void initBleModule() {
 
   // Init CURRENT_NODE_IND
   for (uint16_t i = 0; i < NODES_COUNT; i++)
-    if (getDeviceId(MESH_NODES[i].c_str()) == device_id)
+    if (getDeviceId(MESH_NODES[i]) == device_id)
       CURRENT_NODE_IND = i;
 
   char board_name[128];
