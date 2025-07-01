@@ -13,7 +13,7 @@
 #define AT_LONG_RESPONSE_DELAY 1300
 
 #define MESH_BUFFER_SIZE 10
-#define CONNECTION_TIMEOUT 10000
+#define CONNECTION_TIMEOUT 5000
 #define READINGS_INTERVAL 6000
 #define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
 
@@ -61,7 +61,7 @@ typedef enum {
 // All commands return following format:
 // BleMeshCommandResult;<command-response>\n
 typedef enum {
-  BLE_MESH_COMMAND_UNKNOWN = -1,
+  BLE_MESH_COMMAND_UNKNOWN = 255,
 
   // Parameters: void
   // Returns: void
@@ -151,7 +151,7 @@ BleMeshCommand mesh_command = BLE_MESH_COMMAND_UNKNOWN;
 // Big enough to hold whole mesh list command response
 // shoube be bigger then sizeof(DataEntry)
 uint8_t mesh_command_data[MESH_COMMAND_DATA_SIZE] = {-1};
-const DataId *mesh_list_response = mesh_command_data[3];
+const DataId *mesh_list_response = (const DataId*)(mesh_command_data + 3);
 uint16_t mesh_command_data_size = 0;
 uint16_t mesh_master_list_response_length = 0;
 uint16_t mesh_master_counter = 0;
@@ -203,7 +203,7 @@ void loop() {
     case BLE_STATE_MACHINE_WAIT_AT_RESPONSE: {
       if (!ble_response.startsWith("OK")) {
         if (getStateMachineMillis() > AT_LONG_RESPONSE_DELAY) {
-          Serial.print("AT E");
+          Serial.println("AT E");
           updateStateMachine(BLE_STATE_MACHINE_IDLE);
           break;
         }     
@@ -365,7 +365,6 @@ void loop() {
 
       if (mesh_master_list_response_length == -1) {
         mesh_master_list_response_length = *(uint16_t*)&mesh_command_data[1];
-        Serial.println(mesh_master_list_response_length);
       }
 
       if (mesh_command_data_size < mesh_master_list_response_length * sizeof(DataId) + 3) {
@@ -375,6 +374,13 @@ void loop() {
 
       Serial.print("MESH L: ");
       Serial.println(mesh_master_list_response_length);
+
+      for (uint8_t i =0; i< mesh_master_list_response_length; i++) {
+        Serial.print("L: ");
+        Serial.print(mesh_list_response[i].device_id);
+        Serial.print(":");
+        Serial.println(mesh_list_response[i].counter);
+      }
 
       mesh_master_counter = 0;
 
@@ -389,7 +395,6 @@ void loop() {
 
       if (mesh_master_counter >= MESH_BUFFER_SIZE) {
         mesh_master_counter = 0;
-        Serial.print("G S");
         updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
         break;
       }
@@ -397,22 +402,25 @@ void loop() {
       const DataEntry *local_entry = &mesh_node_data_buffer[mesh_master_counter++];
       if (local_entry->id.device_id == 0) break;
 
+      bool remote_has_entry = false;
       for (uint16_t i = 0; i < mesh_master_list_response_length; i++) {
-        // Detected missing entry
-        if (mesh_list_response[i].device_id != local_entry->id.device_id &&
-              mesh_list_response[i].counter != local_entry->id.counter) {
-
-          Serial.print("MESH P: ");
-          Serial.print(local_entry->id.device_id);
-          Serial.print(":");
-          Serial.println(local_entry->id.counter);
-
-          bt_serial.write(BLE_MESH_COMMAND_PUSH_DATA_ENTRY);
-          bt_serial.write((uint8_t*)local_entry, sizeof(DataEntry));
-
-          updateStateMachine(BLE_STATE_MACHINE_PUSH_REMOTE_MISSING_RESPONSE);
+        if (mesh_list_response[i].device_id == local_entry->id.device_id &&
+              mesh_list_response[i].counter == local_entry->id.counter) {
+          remote_has_entry = true;
           break;
         }
+      }
+
+      if (!remote_has_entry) {
+        Serial.print("MESH P: ");
+        Serial.print(local_entry->id.device_id);
+        Serial.print(":");
+        Serial.println(local_entry->id.counter);
+
+        bt_serial.write(BLE_MESH_COMMAND_PUSH_DATA_ENTRY);
+        bt_serial.write((uint8_t*)local_entry, sizeof(DataEntry));
+
+        updateStateMachine(BLE_STATE_MACHINE_PUSH_REMOTE_MISSING_RESPONSE);
       }
       break;
     }
@@ -443,27 +451,32 @@ void loop() {
       }
 
       const DataId *remote_id = &mesh_list_response[mesh_master_counter++];
+      bool entry_exists = false;
 
+      // Detected missing entry
       for (uint16_t i = 0; i < MESH_BUFFER_SIZE; i++) {
         const DataEntry *local_entry = &mesh_node_data_buffer[i];
         if (local_entry->id.device_id == 0) continue;
 
-        // Detected missing entry
-        if (local_entry->id.device_id != remote_id->device_id &&
-              local_entry->id.counter != remote_id->counter) {
-          
-          while (bt_serial.available()) bt_serial.read();
-
-          bt_serial.write(BLE_MESH_COMMAND_GET_DATA_ENTRY);
-          bt_serial.write((uint8_t*)remote_id, sizeof(DataId));
-
-          Serial.println("Requesting download");
-
-          mesh_command_data_size = 0;
-          valid_remote_response = -1;
-          updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING_RESPONSE);
+        if (local_entry->id.device_id == remote_id->device_id &&
+          local_entry->id.counter == remote_id->counter) {
+          entry_exists = true;
           break;
         }
+      }
+
+      if (!entry_exists) {
+        bt_serial.write(BLE_MESH_COMMAND_GET_DATA_ENTRY);
+        bt_serial.write((uint8_t*)remote_id, sizeof(DataId));
+
+        Serial.print("G S: ");
+        Serial.print(remote_id->device_id);
+        Serial.print(":");
+        Serial.println(remote_id->counter);
+
+        mesh_command_data_size = 0;
+        valid_remote_response = BLE_MESH_COMMAND_UNKNOWN;
+        updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING_RESPONSE);
       }
 
       break;
@@ -474,27 +487,26 @@ void loop() {
         break;
       }
 
-      Serial.println(mesh_command_data_size);
-      if (valid_remote_response == -1) {
+      if (valid_remote_response == 255) {
         if (!bt_serial.available()) break;
 
         valid_remote_response = bt_serial.read();
 
-        Serial.print("G STATUS: ");
-        Serial.println((char)valid_remote_response);
-
         if (valid_remote_response != OK) {
           Serial.println("MESH G E");
           updateStateMachine(BLE_STATE_MACHINE_DOWNLOAD_REMOTE_MISSING);
-          break;
+        } else {
+          Serial.println("MESH G O");
         }
+
+        break;
       }
 
-      // if (mesh_command_data_size < sizeof(DataEntry)) {
-      //   while (bt_serial.available() && mesh_command_data_size < sizeof(DataEntry))
-      //     remote_downloaded_entry[mesh_command_data_size++] = bt_serial.read();
-      //   break;
-      // }
+      if (mesh_command_data_size < sizeof(DataEntry)) {
+        while (bt_serial.available() && mesh_command_data_size < sizeof(DataEntry))
+          remote_downloaded_entry[mesh_command_data_size++] = bt_serial.read();
+        break;
+      }
 
       const DataEntry *new_entry = (DataEntry*)remote_downloaded_entry;
       updateLocalMeshState(new_entry);
@@ -655,10 +667,9 @@ void loop() {
 
           if (!have_found) {
             bt_serial.write(ERROR);
-            Serial.println("G NOT FOUND");
+            Serial.println("G E");
           }
             
-          Serial.println("Finished G");
           mesh_command = BLE_MESH_COMMAND_UNKNOWN;
           break;
         }
@@ -869,7 +880,7 @@ void initBleModule() {
   }
 
   device_id = getDeviceId(&address_response[8]);
-  if (device_id == -1)
+  if (device_id == -1 || device_id == 0)
     return panic_error = "Invalid ADDR";
 
   // Init CURRENT_NODE_IND
