@@ -12,9 +12,9 @@
 #define AT_RESPONSE_DELAY 100
 #define AT_LONG_RESPONSE_DELAY 1300
 
-#define MESH_BUFFER_SIZE 10
+#define MESH_BUFFER_SIZE 6
 #define CONNECTION_TIMEOUT 5000
-#define READINGS_INTERVAL 6000
+#define READINGS_INTERVAL 10000
 #define MESH_COMMAND_DATA_SIZE sizeof(DataId) * MESH_BUFFER_SIZE + 3
 
 const uint16_t NODES_COUNT = 2;
@@ -160,6 +160,8 @@ uint8_t valid_remote_response = 0;
 uint8_t remote_downloaded_entry[sizeof(DataEntry)] = {0};
 uint32_t last_registered_reading = 0;
 
+bool need_average = false;
+
 void setup() {
   Serial.begin(9600);
   bt_serial.begin(9600);
@@ -170,6 +172,8 @@ void setup() {
   Serial.println("BLE OK");
   Serial.print("ID: ");
   Serial.println(device_id);
+
+  initHumidityTemperatureSensor();
 }
 
 void loop() {
@@ -722,14 +726,24 @@ void loop() {
     aggregation_data_entry.id.counter = readings_counter++;
 
     updateLocalMeshState(&aggregation_data_entry);
+    memset(&aggregation_data_entry, 0, sizeof(DataEntry));
 
+    need_average = false;
     last_registered_reading = millis();
   }
   
 }
 
 void aggregateSensorsReadings() {
-  // TODO:
+  readHumiditySensor(&aggregation_data_entry.humidity_level, need_average);
+  readTemperatureSensor(&aggregation_data_entry.temperature, need_average);
+
+  // Serial.print("Humidity/temp average:");
+  // Serial.print(aggregation_data_entry.humidity_level);
+  // Serial.print(" ");
+  // Serial.println(aggregation_data_entry.temperature);
+
+  // need_average = true;
 }
 
 void loadMeshData() {
