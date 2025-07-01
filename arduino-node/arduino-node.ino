@@ -6,6 +6,7 @@
 #include "LED_array.h"
 #include "light_sensor.h"
 #include "gas_sensor.h"
+#include "sound_sensor.h"
 #include <avr/wdt.h>
 
 // Increase RX buffer size to fit all responses without overwrite
@@ -173,6 +174,7 @@ void setup() {
   initLightSensor();
   initAirQuality();
   initFlameSensor();
+  initSoundSensor();
 }
 
 void loop() {
@@ -740,9 +742,10 @@ void aggregateSensorsReadings() {
   readLightSensor(&aggregation_data_entry.brightness_level, need_average);
   readCo2Sensor(&aggregation_data_entry.co2_level, need_average);
   readFlameSensor(&aggregation_data_entry.flame_detected);
+  readSoundSensor(&aggregation_data_entry.noise_level, need_average);
 
-  // Serial.print("Co2 level:");
-  // Serial.println(aggregation_data_entry.co2_level);
+  Serial.print("Sound:");
+  Serial.println(aggregation_data_entry.noise_level);
 
   need_average = true;
 }
